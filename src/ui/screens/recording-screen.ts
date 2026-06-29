@@ -15,6 +15,7 @@ import { saveProject } from '../../modules/project/project-service';
 import { clipStore } from '../../modules/storage/db';
 import { uid } from '../../core/id';
 import { getUserName, showNameCard } from '../app';
+import { downloadClipsSequential } from '../../modules/export/download';
 
 const COMMAND_LABELS = [
   'Estado Delta — acalmar a mente',
@@ -71,6 +72,7 @@ export function renderRecordingScreen(root: HTMLElement, project: Project): void
       </div>
 
       <div class="rec-controls"></div>
+      <div class="rec-export" style="display:none"></div>
     </section>
   `;
 
@@ -83,6 +85,7 @@ export function renderRecordingScreen(root: HTMLElement, project: Project): void
   const elPrompter  = root.querySelector<HTMLElement>('.rec-prompter')!;
   const elStatus    = root.querySelector<HTMLElement>('.rec-status')!;
   const elControls  = root.querySelector<HTMLElement>('.rec-controls')!;
+  const elExport    = root.querySelector<HTMLElement>('.rec-export')!;
   const elWave      = root.querySelector<HTMLCanvasElement>('.rec-wave')!;
   const elPlayAnim  = root.querySelector<HTMLElement>('.rec-play-anim')!;
   const elWpmValue  = root.querySelector<HTMLElement>('#wpm-display')!;
@@ -156,6 +159,80 @@ export function renderRecordingScreen(root: HTMLElement, project: Project): void
   // --- Helpers de estado ---
   function current() { return project.commands[index]; }
 
+  const EXPORT_LABELS = [
+    '01 - Estado Delta',
+    '02 - Libertação de Traumas',
+    '03 - Autocura e Equilíbrio',
+    '04 - Conhecimento Interior',
+    '05 - Ativação de Funções Superiores',
+    '06 - Frequências Elevadas',
+    '07 - Fechamento',
+  ];
+
+  function renderExportPanel() {
+    const done = project.commands.filter(
+      (cmd) => cmd.recordingId && clips.has(cmd.recordingId),
+    );
+    if (done.length === 0) {
+      elExport.style.display = 'none';
+      return;
+    }
+
+    elExport.style.display = 'block';
+    const userName = getUserName();
+    const suffix = userName ? ` - ${userName}` : '';
+
+    elExport.innerHTML = `
+      <div class="export-panel">
+        <p class="export-title">💾 Salvar gravações (WAV 24-bit, sem perdas)</p>
+        <div class="export-list">
+          ${done.map((cmd) => {
+            const i = project.commands.indexOf(cmd);
+            const label = EXPORT_LABELS[i] ?? `Comando ${i + 1}`;
+            return `<button class="btn btn-dl" data-idx="${i}"
+              title="Baixar ${label}">⬇ ${label}</button>`;
+          }).join('')}
+        </div>
+        ${done.length === project.commands.length
+          ? `<button class="btn btn-dl-all">⬇ Baixar todos (${done.length} arquivos)</button>`
+          : ''}
+      </div>
+    `;
+
+    elExport.querySelectorAll<HTMLButtonElement>('.btn-dl[data-idx]').forEach((btn) => {
+      btn.onclick = () => {
+        const i = Number(btn.dataset.idx);
+        const cmd = project.commands[i];
+        if (!cmd.recordingId) return;
+        const clip = clips.get(cmd.recordingId);
+        if (!clip) return;
+        const label = EXPORT_LABELS[i] ?? `Comando ${i + 1}`;
+        import('../../modules/export/download').then(({ downloadClipWav }) =>
+          downloadClipWav(clip, `${label}${suffix}.wav`),
+        );
+      };
+    });
+
+    const btnAll = elExport.querySelector<HTMLButtonElement>('.btn-dl-all');
+    if (btnAll) {
+      btnAll.onclick = () => {
+        const items = project.commands
+          .map((cmd, i) => {
+            if (!cmd.recordingId) return null;
+            const clip = clips.get(cmd.recordingId);
+            if (!clip) return null;
+            const label = EXPORT_LABELS[i] ?? `Comando ${i + 1}`;
+            return { clip, filename: `${label}${suffix}.wav` };
+          })
+          .filter(Boolean) as { clip: import('../../core/types').AudioClip; filename: string }[];
+        downloadClipsSequential(items);
+        btnAll.textContent = '⏳ Baixando…';
+        setTimeout(() => { btnAll.textContent = `⬇ Baixar todos (${items.length} arquivos)`; },
+          items.length * 400 + 500);
+      };
+    }
+  }
+
   function render() {
     const cmd = current();
     elProgress.textContent = `Comando ${index + 1} de ${project.commands.length}`;
@@ -170,6 +247,7 @@ export function renderRecordingScreen(root: HTMLElement, project: Project): void
       ? `✓ Gravado (${cmd.durationSec?.toFixed(1)}s)`
       : 'Ainda não gravado';
     renderControls(hasRec);
+    renderExportPanel();
   }
 
   function button(label: string, cls: string, onClick: () => void): HTMLButtonElement {
