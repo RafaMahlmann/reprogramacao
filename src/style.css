@@ -586,3 +586,62 @@ body {
   padding: 0.85rem;
   font-size: 1rem;
 }
+
+/* ---------- Volumes ---------- */
+.sess-volumes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.sess-volumes label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.sess-volumes output {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.sess-volumes input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+/* ---------- Transporte ---------- */
+.sess-transport {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.25rem 0 1rem;
+}
+
+.sess-transport .btn {
+  width: 56px;
+  height: 48px;
+  font-size: 1.2rem;
+  padding: 0;
+  border-radius: 10px;
+}
+
+.sess-transport #play {
+  flex: 1;
+}
+
+.sess-time {
+  font-size: 0.95rem;
+  color: var(--muted);
+  margin-left: auto;
+}
+
+.sess-time b { color: var(--text); }
+
+.sess-timeline {
+  cursor: pointer;
+  touch-action: none;
+}

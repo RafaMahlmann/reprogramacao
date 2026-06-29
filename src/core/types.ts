@@ -47,6 +47,8 @@ export interface ProjectSettings {
   targetDurationSec: number;
   /** Volume da música de fundo (0..1). */
   musicVolume: number;
+  /** Volume das gravações de voz (0..1). */
+  voiceVolume: number;
   /** Fade in/out da música em segundos. */
   fadeInSec: number;
   fadeOutSec: number;
@@ -69,6 +71,7 @@ export const DEFAULT_SETTINGS: ProjectSettings = {
   gapAfterLastCommandSec: 5,
   targetDurationSec: 3600,
   musicVolume: 0.5,
+  voiceVolume: 1,
   fadeInSec: 3,
   fadeOutSec: 5,
 };

@@ -72,19 +72,34 @@ export function computeSchedule(project: Project, clips: Map<string, AudioClip>)
   return { cycleSec, cycles, totalSec, events, recorded };
 }
 
+/**
+ * Player de sessão com transporte completo (play/pause/seek) e volumes
+ * independentes (música e voz). Mantém UM AudioContext e UMA rota de música
+ * durante toda a vida do player (createMediaElementSource só pode ser chamado
+ * uma vez por elemento), então pause/seek reposicionam em vez de recriar.
+ */
 export class SessionPlayer {
   private ctx: AudioContext | null = null;
   private musicGain: GainNode | null = null;
+  private voiceGain: GainNode | null = null;
   private musicSource: MediaElementAudioSourceNode | null = null;
-  private schedulerId = 0;
-  private startTime = 0;
-  private nextEventIdx = 0;
-  private rafId = 0;
+  private active = new Set<AudioBufferSourceNode>();
 
-  private readonly schedule: SessionSchedule;
+  private schedulerId = 0;
+  private rafId = 0;
+  private startCtxTime = 0;   // ctx.currentTime quando o trecho atual começou
+  private startPos = 0;       // posição na sessão (s) no início do trecho
+  private positionSec = 0;    // posição atual quando parado/pausado
+  private nextEventIdx = 0;
+  private playing = false;
+
+  private schedule: SessionSchedule;
   private readonly clips: Map<string, AudioClip>;
   private readonly musicEl: HTMLAudioElement | null;
   private readonly settings: Project['settings'];
+
+  private onTime?: (sec: number) => void;
+  private onEnd?: () => void;
 
   constructor(
     schedule: SessionSchedule,
@@ -98,42 +113,121 @@ export class SessionPlayer {
     this.settings = settings;
   }
 
-  get isPlaying(): boolean {
-    return this.ctx !== null;
+  get isPlaying(): boolean { return this.playing; }
+  get position(): number { return this.playing ? this.elapsed() : this.positionSec; }
+
+  setCallbacks(onTime?: (sec: number) => void, onEnd?: () => void) {
+    this.onTime = onTime; this.onEnd = onEnd;
   }
 
-  /** Inicia a reprodução. onTime recebe o segundo atual; onEnd ao terminar. */
-  play(onTime?: (sec: number) => void, onEnd?: () => void): void {
-    this.ctx = new AudioContext();
-    const ctx = this.ctx;
+  updateSchedule(s: SessionSchedule) {
+    this.schedule = s;
+    if (this.positionSec > s.totalSec) this.positionSec = 0;
+  }
 
-    // Música em loop com fade in/out
+  setMusicVolume(v: number) { if (this.musicGain) this.musicGain.gain.value = v; }
+  setVoiceVolume(v: number) { if (this.voiceGain) this.voiceGain.gain.value = v; }
+
+  private ensureGraph() {
+    if (this.ctx) return;
+    const ctx = new AudioContext();
+    this.ctx = ctx;
+    this.voiceGain = ctx.createGain();
+    this.voiceGain.gain.value = this.settings.voiceVolume;
+    this.voiceGain.connect(ctx.destination);
+
     if (this.musicEl) {
       this.musicEl.loop = true;
-      this.musicEl.currentTime = 0;
       this.musicSource = ctx.createMediaElementSource(this.musicEl);
       this.musicGain = ctx.createGain();
+      this.musicGain.gain.value = this.settings.musicVolume;
       this.musicSource.connect(this.musicGain).connect(ctx.destination);
+    }
+  }
 
-      const vol = this.settings.musicVolume;
-      const fadeIn = this.settings.fadeInSec;
-      const fadeOut = this.settings.fadeOutSec;
-      const total = this.schedule.totalSec;
-      const now = ctx.currentTime;
-      this.musicGain.gain.setValueAtTime(0.0001, now);
-      this.musicGain.gain.exponentialRampToValueAtTime(Math.max(0.0001, vol), now + Math.max(0.1, fadeIn));
-      this.musicGain.gain.setValueAtTime(vol, now + Math.max(0, total - fadeOut));
-      this.musicGain.gain.exponentialRampToValueAtTime(0.0001, now + total);
+  private elapsed(): number {
+    if (!this.ctx) return this.positionSec;
+    return this.startPos + (this.ctx.currentTime - this.startCtxTime);
+  }
+
+  /** Toca a partir da posição atual (positionSec). */
+  play(): void {
+    if (this.playing) return;
+    this.ensureGraph();
+    const ctx = this.ctx!;
+    void ctx.resume();
+
+    this.startPos = this.positionSec;
+    this.startCtxTime = ctx.currentTime;
+    this.nextEventIdx = this.schedule.events.findIndex((e) => e.startSec >= this.startPos - 0.01);
+    if (this.nextEventIdx < 0) this.nextEventIdx = this.schedule.events.length;
+
+    if (this.musicEl && this.musicEl.duration) {
+      this.musicEl.currentTime = this.startPos % this.musicEl.duration;
       void this.musicEl.play();
     }
 
-    this.startTime = ctx.currentTime;
-    this.nextEventIdx = 0;
+    this.playing = true;
+    this.startScheduler();
+    this.startPlayhead();
+  }
 
-    // Lookahead scheduler (25ms tick, 200ms de antecipação)
+  pause(): void {
+    if (!this.playing) return;
+    this.positionSec = this.elapsed();
+    this.haltPlayback();
+  }
+
+  /** Move a posição para `sec`. Continua tocando se já estava tocando. */
+  seek(sec: number): void {
+    const clamped = Math.max(0, Math.min(sec, this.schedule.totalSec));
+    if (this.playing) {
+      this.stopActiveSources();
+      this.positionSec = clamped;
+      this.startPos = clamped;
+      this.startCtxTime = this.ctx!.currentTime;
+      this.nextEventIdx = this.schedule.events.findIndex((e) => e.startSec >= clamped - 0.01);
+      if (this.nextEventIdx < 0) this.nextEventIdx = this.schedule.events.length;
+      if (this.musicEl && this.musicEl.duration) this.musicEl.currentTime = clamped % this.musicEl.duration;
+    } else {
+      this.positionSec = clamped;
+      this.onTime?.(clamped);
+    }
+  }
+
+  /** Para e volta para o início. */
+  reset(): void {
+    this.haltPlayback();
+    this.positionSec = 0;
+    if (this.musicEl) this.musicEl.currentTime = 0;
+    this.onTime?.(0);
+  }
+
+  /** Para tudo e libera o contexto (ao sair da tela). */
+  dispose(): void {
+    this.haltPlayback();
+    if (this.ctx && this.ctx.state !== 'closed') void this.ctx.close();
+    this.ctx = null;
+  }
+
+  private haltPlayback() {
+    this.playing = false;
+    if (this.schedulerId) { clearInterval(this.schedulerId); this.schedulerId = 0; }
+    if (this.rafId) { cancelAnimationFrame(this.rafId); this.rafId = 0; }
+    this.stopActiveSources();
+    if (this.musicEl) this.musicEl.pause();
+  }
+
+  private stopActiveSources() {
+    this.active.forEach((s) => { try { s.stop(); } catch { /* já parado */ } s.disconnect(); });
+    this.active.clear();
+  }
+
+  private startScheduler() {
+    const ctx = this.ctx!;
     const LOOKAHEAD = 0.2;
     this.schedulerId = window.setInterval(() => {
-      const elapsed = ctx.currentTime - this.startTime;
+      const elapsed = this.elapsed();
       while (
         this.nextEventIdx < this.schedule.events.length &&
         this.schedule.events[this.nextEventIdx].startSec <= elapsed + LOOKAHEAD
@@ -142,15 +236,16 @@ export class SessionPlayer {
         this.nextEventIdx++;
       }
       if (elapsed >= this.schedule.totalSec) {
-        this.stop();
-        onEnd?.();
+        this.reset();
+        this.onEnd?.();
       }
     }, 25);
+  }
 
-    // Playhead (para a UI)
+  private startPlayhead() {
     const tick = () => {
-      if (!this.ctx) return;
-      onTime?.(this.ctx.currentTime - this.startTime);
+      if (!this.playing) return;
+      this.onTime?.(this.elapsed());
       this.rafId = requestAnimationFrame(tick);
     };
     this.rafId = requestAnimationFrame(tick);
@@ -163,18 +258,10 @@ export class SessionPlayer {
     clip.channels.forEach((data, ch) => buffer.copyToChannel(data as Float32Array<ArrayBuffer>, ch));
     const src = ctx.createBufferSource();
     src.buffer = buffer;
-    src.connect(ctx.destination);
-    const when = this.startTime + ev.startSec;
+    src.connect(this.voiceGain!);
+    const when = this.startCtxTime + (ev.startSec - this.startPos);
     src.start(Math.max(when, ctx.currentTime));
-  }
-
-  stop(): void {
-    if (this.schedulerId) { clearInterval(this.schedulerId); this.schedulerId = 0; }
-    if (this.rafId) { cancelAnimationFrame(this.rafId); this.rafId = 0; }
-    if (this.musicEl) { this.musicEl.pause(); }
-    if (this.ctx && this.ctx.state !== 'closed') void this.ctx.close();
-    this.ctx = null;
-    this.musicGain = null;
-    this.musicSource = null;
+    this.active.add(src);
+    src.onended = () => { this.active.delete(src); src.disconnect(); };
   }
 }
