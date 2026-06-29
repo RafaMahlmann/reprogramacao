@@ -274,20 +274,29 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
   };
   $('#stop').onclick = () => { player.reset(); btnPlay.textContent = '▶'; redraw(0); };
 
-  // ---- Busca na timeline ----
+  // ---- Busca na timeline (arrasta e toca de onde soltar) ----
   let seeking = false;
   const seekFromEvent = (clientX: number) => {
     const rect = canvas.getBoundingClientRect();
     const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-    player.seek(ratio * schedule.totalSec);
-    redraw(ratio * schedule.totalSec);
+    const pos = ratio * schedule.totalSec;
+    player.seek(pos);
+    redraw(pos);
   };
   canvas.addEventListener('pointerdown', (e) => {
     if (schedule.recorded.length === 0) return;
     seeking = true; canvas.setPointerCapture(e.pointerId); seekFromEvent(e.clientX);
   });
   canvas.addEventListener('pointermove', (e) => { if (seeking) seekFromEvent(e.clientX); });
-  canvas.addEventListener('pointerup', () => { seeking = false; });
+  canvas.addEventListener('pointerup', () => {
+    if (!seeking) return;
+    seeking = false;
+    // Ao soltar, começa (ou continua) tocando da posição escolhida
+    if (!player.isPlaying && schedule.recorded.length > 0) {
+      player.play();
+      btnPlay.textContent = '⏸';
+    }
+  });
 
   function redraw(pos: number) {
     drawTimeline(canvas, schedule, musicName, pos);
