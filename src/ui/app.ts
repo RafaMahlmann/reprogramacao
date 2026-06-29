@@ -1,5 +1,6 @@
 import { createProject, loadMostRecentProject } from '../modules/project/project-service';
 import type { Project } from '../core/types';
+import { requestPersistentStorage } from '../modules/storage/db';
 import { renderRecordingScreen } from './screens/recording-screen';
 import { renderSavedAudiosScreen } from './screens/saved-audios-screen';
 import { renderSessionScreen } from './screens/session-screen';
@@ -40,6 +41,7 @@ export function startApp(root: HTMLElement): void {
 
   const screen = root.querySelector<HTMLElement>('#screen')!;
   screenEl = screen;
+  void requestPersistentStorage();
 
   function openRecording() {
     loadMostRecentProject().then((existing) => {

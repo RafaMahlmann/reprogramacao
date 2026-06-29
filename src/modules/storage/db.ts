@@ -103,11 +103,61 @@ export const clipStore = {
 };
 
 /**
- * Armazena mídia bruta (Blob), como a música de fundo. Guardamos o arquivo
- * original sem decodificar — seguro para arquivos longos (1h+).
+ * Armazena mídia bruta (Blob), como a música de fundo.
+ *
+ * Arquivos grandes (centenas de MB) estouram o IndexedDB em muitos navegadores.
+ * Por isso usamos preferencialmente o OPFS (Origin Private File System), feito
+ * para arquivos grandes — grava direto no disco, com cota muito maior. Se o OPFS
+ * não estiver disponível, caímos para o IndexedDB.
  */
+function opfsAvailable(): boolean {
+  return typeof navigator !== 'undefined'
+    && !!navigator.storage
+    && 'getDirectory' in navigator.storage;
+}
+
+async function mediaDir(): Promise<FileSystemDirectoryHandle> {
+  const root = await navigator.storage.getDirectory();
+  return root.getDirectoryHandle('media', { create: true });
+}
+
+/** Pede armazenamento durável (reduz risco de o navegador apagar os dados). */
+export async function requestPersistentStorage(): Promise<void> {
+  try {
+    if (navigator.storage?.persist) await navigator.storage.persist();
+  } catch { /* ignore */ }
+}
+
 export const mediaStore = {
-  save: (id: string, blob: Blob) => tx(STORE_MEDIA, 'readwrite', (s) => s.put(blob, id)),
-  get: (id: string) => tx<Blob | undefined>(STORE_MEDIA, 'readonly', (s) => s.get(id)),
-  delete: (id: string) => tx(STORE_MEDIA, 'readwrite', (s) => s.delete(id)),
+  async save(id: string, blob: Blob): Promise<void> {
+    if (opfsAvailable()) {
+      try {
+        const dir = await mediaDir();
+        const fh = await dir.getFileHandle(id, { create: true });
+        const ws = await fh.createWritable();
+        await ws.write(blob);
+        await ws.close();
+        return;
+      } catch { /* cai para IndexedDB */ }
+    }
+    await tx(STORE_MEDIA, 'readwrite', (s) => s.put(blob, id));
+  },
+
+  async get(id: string): Promise<Blob | undefined> {
+    if (opfsAvailable()) {
+      try {
+        const dir = await mediaDir();
+        const fh = await dir.getFileHandle(id);
+        return await fh.getFile();
+      } catch { /* não está no OPFS; tenta IndexedDB */ }
+    }
+    return tx<Blob | undefined>(STORE_MEDIA, 'readonly', (s) => s.get(id));
+  },
+
+  async delete(id: string): Promise<void> {
+    if (opfsAvailable()) {
+      try { const dir = await mediaDir(); await dir.removeEntry(id); } catch { /* ignore */ }
+    }
+    try { await tx(STORE_MEDIA, 'readwrite', (s) => s.delete(id)); } catch { /* ignore */ }
+  },
 };
