@@ -99,6 +99,48 @@ body {
 
 .name-card-btn { align-self: flex-end; }
 
+/* ---------- Dots de navegação ---------- */
+.rec-dots {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 0.9rem;
+}
+
+.rec-dot {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid #2c313d;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.rec-dot--done {
+  background: rgba(79, 208, 122, 0.15);
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+.rec-dot--active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(108,140,255,0.15);
+}
+
+.rec-dot--done.rec-dot--active {
+  border-color: var(--accent);
+  background: rgba(108,140,255,0.2);
+  color: var(--accent);
+}
+
 /* ---------- Barra superior da tela de gravação ---------- */
 .rec-top-bar {
   display: flex;
