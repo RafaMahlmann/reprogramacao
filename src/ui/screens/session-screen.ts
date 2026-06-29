@@ -1,14 +1,19 @@
 /**
  * Tela de Sessão: monta e reproduz a sequência final.
  *
- * Controles: importar música, ajustar intervalos/duração, volumes independentes
- * (música e voz), transporte (play/pause/parar) e busca clicando/arrastando na
- * timeline. Reverb e detecção 432Hz: próximas etapas.
+ * Música: importar do dispositivo/nuvem (seletor do SO), arrastar e soltar,
+ * colar URL, biblioteca interna de trilhas 432 Hz, e recentes. Mostra duração/
+ * tamanho e avisa se o formato não for suportado.
+ *
+ * Controles: volumes independentes (música/voz), transporte (play/pause/parar)
+ * e busca clicando/arrastando na timeline. Reverb e detecção 432Hz: próximas etapas.
  */
 import type { AudioClip, Project } from '../../core/types';
 import { clipStore, mediaStore } from '../../modules/storage/db';
 import { saveProject } from '../../modules/project/project-service';
 import { computeSchedule, SessionPlayer, type SessionSchedule } from '../../modules/audio/session-engine';
+import { BUILTIN_TRACKS, renderBuiltinTrack } from '../../modules/audio/builtin-tracks';
+import { getRecents, addRecent } from '../../modules/audio/music-recents';
 import { showRecording } from '../app';
 import { uid } from '../../core/id';
 
@@ -16,6 +21,9 @@ function fmt(sec: number): string {
   const m = Math.floor(sec / 60);
   const s = Math.floor(sec % 60);
   return `${m}:${s.toString().padStart(2, '0')}`;
+}
+function fmtBytes(n: number): string {
+  return n > 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.round(n / 1e3)} KB`;
 }
 
 export async function renderSessionScreen(root: HTMLElement, project: Project): Promise<void> {
@@ -29,27 +37,24 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
     }
   }
 
+  const s = project.settings;
   let musicEl: HTMLAudioElement | null = null;
   let musicName = project.music?.name ?? '';
+  let musicSize = 0;
+  let schedule: SessionSchedule = computeSchedule(project, clips);
+  let player: SessionPlayer;
+
   if (project.music?.recordingId) {
     const blob = await mediaStore.get(project.music.recordingId);
-    if (blob) { musicEl = makeAudio(blob); await waitDuration(musicEl); }
+    if (blob) { musicEl = makeAudio(blob); musicSize = blob.size; await waitDuration(musicEl); }
   }
-
-  const s = project.settings;
-  let schedule: SessionSchedule = computeSchedule(project, clips);
-  let player = new SessionPlayer(schedule, clips, musicEl, s);
 
   root.innerHTML = `
     <section class="rec">
       <button class="btn-link" id="back">‹ Voltar para gravação</button>
       <h2 class="sess-title">🎚️ Montagem da sessão</h2>
 
-      <div class="sess-music">
-        <label class="btn btn-project" for="music-file">🎵 ${musicName ? 'Trocar música' : 'Importar música de fundo'}</label>
-        <input type="file" accept="audio/*" hidden id="music-file" />
-        <span class="sess-music-name">${musicName || 'Nenhuma música'}</span>
-      </div>
+      <div id="music-section"></div>
 
       <div class="sess-volumes">
         <label>🎵 Volume da música <output id="mv-out">${Math.round(s.musicVolume * 100)}%</output>
@@ -97,31 +102,28 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
   const elCur = $('#cur');
   const elTot = $('#tot');
 
-  // --- Navegação ---
+  function makePlayer() {
+    player = new SessionPlayer(schedule, clips, musicEl, s);
+    player.setCallbacks((sec) => redraw(sec), () => { btnPlay.textContent = '▶'; });
+  }
+  makePlayer();
+
   $('#back').onclick = () => { player.dispose(); showRecording(project); };
 
-  // --- Volumes ---
+  // ---- Volumes ----
   const mv = $<HTMLInputElement>('#mv');
   const vv = $<HTMLInputElement>('#vv');
-  mv.oninput = () => {
-    s.musicVolume = Number(mv.value) / 100;
-    $('#mv-out').textContent = `${mv.value}%`;
-    player.setMusicVolume(s.musicVolume);
-  };
+  mv.oninput = () => { s.musicVolume = +mv.value / 100; $('#mv-out').textContent = `${mv.value}%`; player.setMusicVolume(s.musicVolume); };
   mv.onchange = () => void saveProject(project);
-  vv.oninput = () => {
-    s.voiceVolume = Number(vv.value) / 100;
-    $('#vv-out').textContent = `${vv.value}%`;
-    player.setVoiceVolume(s.voiceVolume);
-  };
+  vv.oninput = () => { s.voiceVolume = +vv.value / 100; $('#vv-out').textContent = `${vv.value}%`; player.setVoiceVolume(s.voiceVolume); };
   vv.onchange = () => void saveProject(project);
 
-  // --- Steppers ---
+  // ---- Steppers ----
   root.querySelectorAll<HTMLElement>('.sess-stepper').forEach((stepper) => {
     const key = stepper.dataset.key!;
     stepper.querySelectorAll('button').forEach((b) => {
       b.onclick = () => {
-        applyStep(key, Number((b as HTMLButtonElement).dataset.d));
+        applyStep(key, +(b as HTMLButtonElement).dataset.d!);
         stepper.querySelector('b')!.textContent = stepperLabel(key);
         player.reset();
         schedule = computeSchedule(project, clips);
@@ -132,14 +134,11 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
       };
     });
   });
-
   function stepperLabel(key: string): string {
-    switch (key) {
-      case 'gapBetweenCommandsSec': return `${s.gapBetweenCommandsSec}s`;
-      case 'gapAfterLastCommandSec': return `${s.gapAfterLastCommandSec}s`;
-      case 'targetDurationMin': return `${Math.round(s.targetDurationSec / 60)} min`;
-      default: return '';
-    }
+    if (key === 'gapBetweenCommandsSec') return `${s.gapBetweenCommandsSec}s`;
+    if (key === 'gapAfterLastCommandSec') return `${s.gapAfterLastCommandSec}s`;
+    if (key === 'targetDurationMin') return `${Math.round(s.targetDurationSec / 60)} min`;
+    return '';
   }
   function applyStep(key: string, d: number) {
     if (key === 'gapBetweenCommandsSec') s.gapBetweenCommandsSec = Math.max(0, s.gapBetweenCommandsSec + d);
@@ -147,29 +146,127 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
     else if (key === 'targetDurationMin') s.targetDurationSec = Math.max(60, s.targetDurationSec + d * 60);
   }
 
-  // --- Import de música ---
-  $<HTMLInputElement>('#music-file').onchange = async (e) => {
-    const file = (e.target as HTMLInputElement).files?.[0];
-    if (!file) return;
+  // ---- Aplicar uma música (de qualquer fonte) ----
+  async function applyMusic(blob: Blob, name: string, id: string, isBuiltin = false) {
     player.dispose();
-    const id = project.music?.recordingId ?? uid();
-    await mediaStore.save(id, file);
-    musicEl = makeAudio(file);
-    musicName = file.name;
+    await mediaStore.save(id, blob);
+    musicEl = makeAudio(blob);
+    musicName = name;
+    musicSize = blob.size;
     await waitDuration(musicEl);
-    project.music = { id, name: file.name, recordingId: id, durationSec: musicEl.duration || 0, tuneTo432: false };
+    const dur = isFinite(musicEl.duration) ? musicEl.duration : 0;
+    project.music = { id, name, recordingId: id, durationSec: dur, tuneTo432: false };
     await saveProject(project);
-    $('.sess-music-name').textContent = file.name;
-    player = new SessionPlayer(schedule, clips, musicEl, s);
+    if (!isBuiltin) addRecent({ id, name });
+    makePlayer();
     btnPlay.textContent = '▶';
+    renderMusicSection();
     redraw(0);
-  };
+  }
 
-  // --- Transporte ---
-  player.setCallbacks(
-    (sec) => redraw(sec),
-    () => { btnPlay.textContent = '▶'; },
-  );
+  // ---- Seção de música (reconstruída a cada mudança) ----
+  function renderMusicSection() {
+    const sec = $('#music-section');
+    const dur = musicEl && isFinite(musicEl.duration) ? musicEl.duration : 0;
+    const unsupported = musicName && dur === 0;
+
+    sec.innerHTML = `
+      <div class="music-drop" id="drop">
+        <strong>🎵 Música de fundo</strong>
+        <span>Arraste um arquivo aqui, ou <u>busque no dispositivo / nuvem</u></span>
+        <input type="file" accept="audio/*" hidden id="music-file" />
+      </div>
+
+      <div class="music-url">
+        <input type="url" id="url-in" placeholder="Cole um link (URL) de áudio…" />
+        <button class="btn btn-project" id="url-go">Importar</button>
+      </div>
+
+      <div class="music-lib">
+        <span class="music-lib-title">Trilhas internas (432 Hz)</span>
+        <div class="music-chips">
+          ${BUILTIN_TRACKS.map((t) =>
+            `<button class="music-chip ${project.music?.recordingId === t.id ? 'is-sel' : ''}" data-builtin="${t.id}">${t.name}</button>`,
+          ).join('')}
+        </div>
+      </div>
+
+      ${getRecents().length ? `
+      <div class="music-lib">
+        <span class="music-lib-title">Recentes</span>
+        <div class="music-chips">
+          ${getRecents().map((r) =>
+            `<button class="music-chip ${project.music?.recordingId === r.id ? 'is-sel' : ''}" data-recent="${r.id}" title="${r.name}">${r.name.length > 22 ? r.name.slice(0, 20) + '…' : r.name}</button>`,
+          ).join('')}
+        </div>
+      </div>` : ''}
+
+      <div class="music-current">
+        ${musicName
+          ? unsupported
+            ? `<span class="sess-warn">⚠ "${musicName}" — formato não suportado pelo navegador. Tente MP3, M4A, WAV ou OGG.</span>`
+            : `🎵 <strong>${musicName}</strong> · ${fmt(dur)}${musicSize ? ' · ' + fmtBytes(musicSize) : ''}`
+          : '<span class="music-none">Nenhuma música escolhida</span>'}
+      </div>
+    `;
+
+    // Drop zone + clique abre seletor
+    const drop = $('#drop');
+    const fileInput = $<HTMLInputElement>('#music-file');
+    drop.onclick = () => fileInput.click();
+    fileInput.onchange = (e) => {
+      const f = (e.target as HTMLInputElement).files?.[0];
+      if (f) void applyMusic(f, f.name, project.music?.recordingId && !project.music.recordingId.startsWith('builtin:') ? project.music.recordingId : uid());
+    };
+    drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('drag'); });
+    drop.addEventListener('dragleave', () => drop.classList.remove('drag'));
+    drop.addEventListener('drop', (e) => {
+      e.preventDefault(); drop.classList.remove('drag');
+      const f = e.dataTransfer?.files?.[0];
+      if (f && f.type.startsWith('audio')) void applyMusic(f, f.name, uid());
+      else if (f) alert('Esse arquivo não parece ser áudio.');
+    });
+
+    // URL
+    const urlIn = $<HTMLInputElement>('#url-in');
+    $('#url-go').onclick = async () => {
+      const url = urlIn.value.trim();
+      if (!url) return;
+      const current = $('.music-current');
+      current.innerHTML = 'Importando do link…';
+      try {
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const blob = await resp.blob();
+        const name = decodeURIComponent(url.split('/').pop()?.split('?')[0] || 'musica');
+        await applyMusic(blob, name, uid());
+      } catch {
+        current.innerHTML = '<span class="sess-warn">⚠ Não foi possível baixar desse link (o site pode bloquear download por CORS). Tente baixar o arquivo e importar do dispositivo.</span>';
+      }
+    };
+
+    // Biblioteca interna
+    sec.querySelectorAll<HTMLButtonElement>('[data-builtin]').forEach((b) => {
+      b.onclick = async () => {
+        const id = b.dataset.builtin!;
+        b.textContent = 'Gerando…';
+        const blob = await renderBuiltinTrack(id);
+        await applyMusic(blob, BUILTIN_TRACKS.find((t) => t.id === id)!.name, id, true);
+      };
+    });
+
+    // Recentes
+    sec.querySelectorAll<HTMLButtonElement>('[data-recent]').forEach((b) => {
+      b.onclick = async () => {
+        const id = b.dataset.recent!;
+        const blob = await mediaStore.get(id);
+        if (!blob) { alert('Esta música recente não está mais na memória.'); return; }
+        await applyMusic(blob, b.title, id, true); // já está em recents, não readiciona
+      };
+    });
+  }
+
+  // ---- Transporte ----
   btnPlay.onclick = () => {
     if (schedule.recorded.length === 0) return;
     if (player.isPlaying) { player.pause(); btnPlay.textContent = '▶'; }
@@ -177,7 +274,7 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
   };
   $('#stop').onclick = () => { player.reset(); btnPlay.textContent = '▶'; redraw(0); };
 
-  // --- Busca (clicar/arrastar na timeline) ---
+  // ---- Busca na timeline ----
   let seeking = false;
   const seekFromEvent = (clientX: number) => {
     const rect = canvas.getBoundingClientRect();
@@ -203,6 +300,7 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
     }
   }
 
+  renderMusicSection();
   redraw(0);
 }
 
@@ -211,12 +309,12 @@ function makeAudio(blob: Blob): HTMLAudioElement {
   el.preload = 'metadata';
   return el;
 }
-
 function waitDuration(el: HTMLAudioElement): Promise<void> {
   return new Promise((resolve) => {
     if (el.readyState >= 1 && isFinite(el.duration)) return resolve();
     el.addEventListener('loadedmetadata', () => resolve(), { once: true });
-    setTimeout(resolve, 3000);
+    el.addEventListener('error', () => resolve(), { once: true });
+    setTimeout(resolve, 4000);
   });
 }
 
@@ -224,7 +322,6 @@ function drawTimeline(canvas: HTMLCanvasElement, schedule: SessionSchedule, musi
   const ctx = canvas.getContext('2d')!;
   const w = canvas.width, h = canvas.height;
   ctx.clearRect(0, 0, w, h);
-
   const total = schedule.totalSec || 60;
   const pxPerSec = w / total;
 

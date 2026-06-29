@@ -124,6 +124,22 @@ e sem congelar a interface em faixas longas.
 
 ---
 
+## Fase D.5 — Share Target (PWA) para música  [PENDENTE]
+
+**Modo:** Opus normal. **Risco:** médio (só testável com PWA instalado + HTTPS).
+
+A importação de música já cobre: dispositivo/nuvem (seletor do SO), arrastar e soltar,
+colar URL, biblioteca interna 432 Hz (sintetizada em `builtin-tracks.ts`), recentes e
+validação. Falta o **Web Share Target**: receber um áudio compartilhado de outro app.
+
+Subsídios:
+- Adicionar `share_target` ao manifest (vite-plugin-pwa → `manifest.share_target`),
+  método POST, `enctype: multipart/form-data`, com um campo de arquivo `audio/*`.
+- Tratar o POST no service worker (Workbox `registerRoute`) ou via Launch Queue,
+  guardando o arquivo recebido e redirecionando para a tela de sessão.
+- Só funciona com o app **instalado** no celular e servido por **HTTPS** — não dá
+  para validar no localhost. Testar no GitHub Pages após o deploy.
+
 ## Fase E — Gerenciador de projetos + forma de onda
 
 **Modo:** Fast mode. **Risco:** baixo (UI).
