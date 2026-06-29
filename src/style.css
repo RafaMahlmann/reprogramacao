@@ -40,6 +40,89 @@ body {
   font-size: 0.95rem;
 }
 
+.app-header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.btn-saved {
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.85rem;
+  padding: 0.55rem 1rem;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* ---------- Tela de áudios salvos ---------- */
+.rec-loading {
+  padding: 2rem 1.25rem;
+  color: var(--muted);
+  text-align: center;
+}
+
+.saved-title {
+  font-size: 1.15rem;
+  margin: 0.75rem 0 0.25rem;
+}
+
+.saved-sub {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin: 0 0 1.25rem;
+  line-height: 1.5;
+}
+
+.saved-empty {
+  color: var(--muted);
+  padding: 1.5rem 0;
+}
+
+.saved-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-bottom: 1.25rem;
+}
+
+.saved-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  background: var(--surface-2);
+  border-radius: 10px;
+  flex-wrap: wrap;
+}
+
+.saved-row-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.saved-row-label {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.saved-row-dur {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.saved-row-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.saved-row .btn {
+  font-size: 0.82rem;
+  padding: 0.45rem 0.9rem;
+}
+
 .rec {
   background: var(--surface);
   border-radius: var(--radius);

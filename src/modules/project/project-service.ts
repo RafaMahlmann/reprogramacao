@@ -62,6 +62,17 @@ export function listProjects(): Promise<Project[]> {
   return projectStore.list();
 }
 
+/**
+ * Devolve o projeto modificado mais recentemente (por updatedAt).
+ * getAll() do IndexedDB devolve por ordem de chave (uid aleatório), não por
+ * data — por isso ordenamos explicitamente.
+ */
+export async function loadMostRecentProject(): Promise<Project | undefined> {
+  const projects = await projectStore.list();
+  if (projects.length === 0) return undefined;
+  return projects.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))[0];
+}
+
 export function loadProject(id: string): Promise<Project | undefined> {
   return projectStore.get(id);
 }

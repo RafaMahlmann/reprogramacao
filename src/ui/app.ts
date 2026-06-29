@@ -1,6 +1,7 @@
-import { createProject, listProjects } from '../modules/project/project-service';
+import { createProject, loadMostRecentProject } from '../modules/project/project-service';
 import type { Project } from '../core/types';
 import { renderRecordingScreen } from './screens/recording-screen';
+import { renderSavedAudiosScreen } from './screens/saved-audios-screen';
 
 const NAME_KEY = 'reprogramacao:userName';
 
@@ -15,27 +16,36 @@ export function setUserName(name: string): void {
 export function startApp(root: HTMLElement): void {
   root.innerHTML = `
     <header class="app-header">
-      <h1>Reprogramação</h1>
-      <p class="tagline">Sua voz, sua frequência.</p>
+      <div class="app-header-row">
+        <div>
+          <h1>Reprogramação</h1>
+          <p class="tagline">Sua voz, sua frequência.</p>
+        </div>
+        <button class="btn btn-saved" id="btn-saved">💾 Áudios salvos</button>
+      </div>
     </header>
     <main id="screen"></main>
   `;
 
   const screen = root.querySelector<HTMLElement>('#screen')!;
 
-  // Carrega o projeto mais recente do IndexedDB, ou cria um novo
-  listProjects().then((projects) => {
-    const project: Project = projects.length > 0
-      ? projects[projects.length - 1]
-      : createProject('Reprogramação Neural');
+  function openRecording() {
+    loadMostRecentProject().then((existing) => {
+      const project: Project = existing ?? createProject('Reprogramação Neural');
+      if (!getUserName()) {
+        showNameCard(screen, () => renderRecordingScreen(screen, project));
+      } else {
+        renderRecordingScreen(screen, project);
+      }
+    });
+  }
 
-    const savedName = getUserName();
-    if (!savedName) {
-      showNameCard(screen, () => renderRecordingScreen(screen, project));
-    } else {
-      renderRecordingScreen(screen, project);
-    }
-  });
+  // Botão fixo: acessa os áudios salvos a qualquer momento
+  root.querySelector<HTMLButtonElement>('#btn-saved')!.onclick = () => {
+    void renderSavedAudiosScreen(screen, openRecording);
+  };
+
+  openRecording();
 }
 
 export function showNameCard(container: HTMLElement, onDone: () => void): void {

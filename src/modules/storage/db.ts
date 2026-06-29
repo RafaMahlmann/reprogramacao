@@ -82,4 +82,18 @@ export const clipStore = {
     };
   },
   delete: (id: string) => tx(STORE_CLIPS, 'readwrite', (s) => s.delete(id)),
+
+  /** Lê TODOS os clips guardados, com suas chaves. Usado na recuperação. */
+  async listAll(): Promise<{ id: string; clip: AudioClip }[]> {
+    const keys = await tx<IDBValidKey[]>(STORE_CLIPS, 'readonly', (s) => s.getAllKeys());
+    const values = await tx<StoredClip[]>(STORE_CLIPS, 'readonly', (s) => s.getAll());
+    return keys.map((k, i) => ({
+      id: String(k),
+      clip: {
+        channels: values[i].channels.map((b) => new Float32Array(b)),
+        sampleRate: values[i].sampleRate,
+        durationSec: values[i].durationSec,
+      },
+    }));
+  },
 };
