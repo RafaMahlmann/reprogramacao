@@ -588,6 +588,16 @@ body {
 .music-note { color: var(--muted); font-size: 0.8rem; margin-top: 0.25rem; }
 .music-current-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
 .music-current-row .btn-link { flex: 0 0 auto; color: var(--rec); }
+#music-detect { margin-top: 0.5rem; }
+.music-tuning {
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--text);
+  background: rgba(108,140,255,0.1);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 6px 6px 0;
+  padding: 0.5rem 0.75rem;
+}
 
 .sess-controls {
   display: grid;

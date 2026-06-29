@@ -16,6 +16,7 @@ import { BUILTIN_TRACKS, renderBuiltinTrack } from '../../modules/audio/builtin-
 import { getRecents, addRecent } from '../../modules/audio/music-recents';
 import { VOICE_PRESETS, VoiceEffectChain, DEFAULT_INTENSITY, type StackItem } from '../../modules/audio/voice-effects';
 import { bufferFromClip } from '../../modules/audio/playback';
+import { detectTuning } from '../../modules/pitch/pitch-detector';
 import { showRecording } from '../app';
 import { uid } from '../../core/id';
 
@@ -26,6 +27,16 @@ function fmt(sec: number): string {
 }
 function fmtBytes(n: number): string {
   return n > 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.round(n / 1e3)} KB`;
+}
+
+/** Texto do resultado da detecção de afinação. */
+function tuningText(referenceHz: number): string {
+  const ref = referenceHz.toFixed(1);
+  const cents = 1200 * Math.log2(referenceHz / 432);
+  const rounded = Math.round(cents);
+  if (rounded === 0) return `🎯 Afinação: ~${ref} Hz — já está em 432 Hz.`;
+  const dir = cents > 0 ? 'acima' : 'abaixo';
+  return `🎯 Afinação: ~${ref} Hz · ${Math.abs(rounded)} cents ${dir} de 432 Hz. (ajuste para 432: próxima etapa)`;
 }
 
 export async function renderSessionScreen(root: HTMLElement, project: Project): Promise<void> {
@@ -41,6 +52,7 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
 
   const s = project.settings;
   let musicEl: HTMLAudioElement | null = null;
+  let musicBlob: Blob | null = null;
   let musicName = project.music?.name ?? '';
   let musicSize = 0;
   let musicNote = project.music?.recordingId ? 'Carregando música…' : '';
@@ -261,6 +273,7 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
   async function applyMusic(blob: Blob, name: string, id: string, isBuiltin = false) {
     player.dispose();
     musicEl = makeAudio(blob);
+    musicBlob = blob;
     musicName = name;
     musicSize = blob.size;
     musicNote = 'Lendo duração…';
@@ -285,6 +298,7 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
     if (id) { try { await mediaStore.delete(id); } catch { /* ignore */ } }
     project.music = undefined;
     musicEl = null;
+    musicBlob = null;
     musicName = '';
     musicSize = 0;
     musicNote = '';
@@ -352,6 +366,8 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
           </div>
           ${musicNote ? `<div class="${musicNote.startsWith('⚠') ? 'sess-warn' : 'music-note'}">${musicNote}</div>` : ''}
           ${!musicNote && dur === 0 ? `<div class="sess-warn">⚠ Formato pode não ser suportado pelo navegador. Tente MP3, M4A, WAV ou OGG.</div>` : ''}
+          ${musicBlob ? `<button class="btn fx-ab-btn" id="music-detect">🔎 Detectar afinação (432?)</button>` : ''}
+          ${project.music?.detectedTuningHz ? `<div class="music-tuning">${tuningText(project.music.detectedTuningHz)}</div>` : ''}
         ` : '<span class="music-none">Nenhuma música escolhida</span>'}
       </div>
     `;
@@ -359,6 +375,27 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
     // Drop zone + clique abre seletor
     const removeBtn = sec.querySelector<HTMLButtonElement>('#music-remove');
     if (removeBtn) removeBtn.onclick = removeMusic;
+
+    const detectBtn = sec.querySelector<HTMLButtonElement>('#music-detect');
+    if (detectBtn) detectBtn.onclick = async () => {
+      if (!musicBlob || !project.music) return;
+      detectBtn.textContent = 'Analisando afinação…';
+      detectBtn.disabled = true;
+      try {
+        const res = await detectTuning(musicBlob);
+        project.music.detectedTuningHz = res.referenceHz;
+        await saveProject(project);
+        musicNote = res.confidence < 0.25
+          ? '⚠ Análise incerta (música muito complexa/percussiva) — resultado aproximado.'
+          : '';
+        renderMusicSection();
+      } catch {
+        detectBtn.textContent = '🔎 Detectar afinação (432?)';
+        detectBtn.disabled = false;
+        musicNote = '⚠ Não foi possível analisar esta música.';
+        renderMusicSection();
+      }
+    };
 
     const drop = $('#drop');
     const fileInput = $<HTMLInputElement>('#music-file');
@@ -476,6 +513,7 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
       return;
     }
     musicEl = makeAudio(blob);
+    musicBlob = blob;
     musicName = project.music?.name ?? '';
     musicSize = blob.size;
     renderMusicSection();
