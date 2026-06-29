@@ -104,7 +104,7 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
 
   function makePlayer() {
     player = new SessionPlayer(schedule, clips, musicEl, s);
-    player.setCallbacks((sec) => redraw(sec), () => { btnPlay.textContent = '▶'; });
+    player.setCallbacks((sec) => { if (!seeking) redraw(sec); }, () => { btnPlay.textContent = '▶'; });
   }
   makePlayer();
 
@@ -274,28 +274,28 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
   };
   $('#stop').onclick = () => { player.reset(); btnPlay.textContent = '▶'; redraw(0); };
 
-  // ---- Busca na timeline (arrasta e toca de onde soltar) ----
+  // ---- Busca na timeline (durante o arraste move só o marcador; busca ao soltar) ----
   let seeking = false;
-  const seekFromEvent = (clientX: number) => {
+  let dragPos = 0;
+  const posFromX = (clientX: number) => {
     const rect = canvas.getBoundingClientRect();
     const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-    const pos = ratio * schedule.totalSec;
-    player.seek(pos);
-    redraw(pos);
+    return ratio * schedule.totalSec;
   };
   canvas.addEventListener('pointerdown', (e) => {
     if (schedule.recorded.length === 0) return;
-    seeking = true; canvas.setPointerCapture(e.pointerId); seekFromEvent(e.clientX);
+    seeking = true; canvas.setPointerCapture(e.pointerId);
+    dragPos = posFromX(e.clientX); redraw(dragPos);
   });
-  canvas.addEventListener('pointermove', (e) => { if (seeking) seekFromEvent(e.clientX); });
+  canvas.addEventListener('pointermove', (e) => {
+    if (!seeking) return;
+    dragPos = posFromX(e.clientX); redraw(dragPos);
+  });
   canvas.addEventListener('pointerup', () => {
     if (!seeking) return;
     seeking = false;
-    // Ao soltar, começa (ou continua) tocando da posição escolhida
-    if (!player.isPlaying && schedule.recorded.length > 0) {
-      player.play();
-      btnPlay.textContent = '⏸';
-    }
+    player.seek(dragPos);
+    if (!player.isPlaying) { player.play(); btnPlay.textContent = '⏸'; }
   });
 
   function redraw(pos: number) {

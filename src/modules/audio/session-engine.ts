@@ -159,14 +159,13 @@ export class SessionPlayer {
 
     this.startPos = this.positionSec;
     this.startCtxTime = ctx.currentTime;
-    this.nextEventIdx = this.schedule.events.findIndex((e) => e.startSec >= this.startPos - 0.01);
-    if (this.nextEventIdx < 0) this.nextEventIdx = this.schedule.events.length;
 
     if (this.musicEl && this.musicEl.duration) {
       this.musicEl.currentTime = this.startPos % this.musicEl.duration;
       void this.musicEl.play();
     }
 
+    this.primeFrom(this.startPos);
     this.playing = true;
     this.startScheduler();
     this.startPlayhead();
@@ -186,9 +185,8 @@ export class SessionPlayer {
       this.positionSec = clamped;
       this.startPos = clamped;
       this.startCtxTime = this.ctx!.currentTime;
-      this.nextEventIdx = this.schedule.events.findIndex((e) => e.startSec >= clamped - 0.01);
-      if (this.nextEventIdx < 0) this.nextEventIdx = this.schedule.events.length;
       if (this.musicEl && this.musicEl.duration) this.musicEl.currentTime = clamped % this.musicEl.duration;
+      this.primeFrom(clamped);
     } else {
       this.positionSec = clamped;
       this.onTime?.(clamped);
@@ -251,7 +249,31 @@ export class SessionPlayer {
     this.rafId = requestAnimationFrame(tick);
   }
 
-  private scheduleEvent(ev: SessionEvent, ctx: AudioContext) {
+  /**
+   * Posiciona o ponteiro de eventos em `pos`. Se `pos` cair NO MEIO de um
+   * comando, toca esse comando a partir do offset correto imediatamente, para
+   * não haver silêncio até o próximo evento.
+   */
+  private primeFrom(pos: number) {
+    const ctx = this.ctx!;
+    const events = this.schedule.events;
+    let active = -1;
+    for (let i = 0; i < events.length; i++) {
+      if (events[i].startSec > pos) break;
+      if (pos < events[i].startSec + events[i].durationSec) { active = i; break; }
+    }
+    if (active >= 0) {
+      const ev = events[active];
+      const offset = Math.max(0, pos - ev.startSec);
+      this.scheduleEvent(ev, ctx, ctx.currentTime, offset);
+      this.nextEventIdx = active + 1;
+    } else {
+      this.nextEventIdx = events.findIndex((e) => e.startSec >= pos);
+      if (this.nextEventIdx < 0) this.nextEventIdx = events.length;
+    }
+  }
+
+  private scheduleEvent(ev: SessionEvent, ctx: AudioContext, atTime?: number, offset = 0) {
     const clip = this.clips.get(ev.recordingId);
     if (!clip) return;
     const buffer = ctx.createBuffer(clip.channels.length, clip.channels[0].length, clip.sampleRate);
@@ -259,8 +281,8 @@ export class SessionPlayer {
     const src = ctx.createBufferSource();
     src.buffer = buffer;
     src.connect(this.voiceGain!);
-    const when = this.startCtxTime + (ev.startSec - this.startPos);
-    src.start(Math.max(when, ctx.currentTime));
+    const when = atTime ?? this.startCtxTime + (ev.startSec - this.startPos);
+    src.start(Math.max(when, ctx.currentTime), offset);
     this.active.add(src);
     src.onended = () => { this.active.delete(src); src.disconnect(); };
   }
