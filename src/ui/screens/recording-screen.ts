@@ -91,7 +91,7 @@ export function renderRecordingScreen(root: HTMLElement, project: Project): void
         <textarea class="rec-text" rows="5" spellcheck="false"></textarea>
 
         <div class="rec-viz">
-          <canvas class="rec-wave" width="600" height="64"></canvas>
+          <canvas class="rec-wave" width="600" height="96"></canvas>
           <div class="rec-play-anim" aria-hidden="true" style="display:none">
             <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
           </div>
@@ -262,21 +262,46 @@ export function renderRecordingScreen(root: HTMLElement, project: Project): void
     const ctx2d  = canvas.getContext('2d')!;
     const buf    = new Uint8Array(analyser.frequencyBinCount);
     let rafId    = 0;
+    const AMP = 3.4; // amplifica o desenho (a voz costuma desviar pouco de 128)
     function draw() {
       rafId = requestAnimationFrame(draw);
       analyser.getByteTimeDomainData(buf);
-      const w = canvas.width, h = canvas.height;
+      const w = canvas.width, h = canvas.height, mid = h / 2;
+      const step = w / buf.length;
       ctx2d.clearRect(0, 0, w, h);
+
+      // linha central
       ctx2d.strokeStyle = 'rgba(108,140,255,0.15)';
       ctx2d.lineWidth = 1;
-      ctx2d.beginPath(); ctx2d.moveTo(0, h / 2); ctx2d.lineTo(w, h / 2); ctx2d.stroke();
-      ctx2d.strokeStyle = '#6c8cff'; ctx2d.lineWidth = 2; ctx2d.lineJoin = 'round';
+      ctx2d.beginPath(); ctx2d.moveTo(0, mid); ctx2d.lineTo(w, mid); ctx2d.stroke();
+
+      const yAt = (v: number) => {
+        let y = mid + ((v - 128) / 128) * mid * AMP;
+        return Math.max(1, Math.min(h - 1, y));
+      };
+
+      // área preenchida suave
+      ctx2d.beginPath();
+      ctx2d.moveTo(0, mid);
+      buf.forEach((v, i) => ctx2d.lineTo(i * step, yAt(v)));
+      ctx2d.lineTo(w, mid);
+      ctx2d.closePath();
+      ctx2d.fillStyle = 'rgba(108,140,255,0.18)';
+      ctx2d.fill();
+
+      // linha com brilho
+      ctx2d.shadowColor = 'rgba(108,140,255,0.8)';
+      ctx2d.shadowBlur = 6;
+      ctx2d.strokeStyle = '#8aa6ff';
+      ctx2d.lineWidth = 2.5;
+      ctx2d.lineJoin = 'round';
       ctx2d.beginPath();
       buf.forEach((v, i) => {
-        const y = (v / 128) * (h / 2);
-        i === 0 ? ctx2d.moveTo(0, y) : ctx2d.lineTo(i * (w / buf.length), y);
+        const y = yAt(v);
+        i === 0 ? ctx2d.moveTo(0, y) : ctx2d.lineTo(i * step, y);
       });
       ctx2d.stroke();
+      ctx2d.shadowBlur = 0;
     }
     draw();
     canvas.style.display = 'block';
