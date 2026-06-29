@@ -1,4 +1,4 @@
-import { createProject } from '../modules/project/project-service';
+import { createProject, listProjects } from '../modules/project/project-service';
 import type { Project } from '../core/types';
 import { renderRecordingScreen } from './screens/recording-screen';
 
@@ -13,8 +13,6 @@ export function setUserName(name: string): void {
 }
 
 export function startApp(root: HTMLElement): void {
-  const project: Project = createProject('Reprogramação Neural');
-
   root.innerHTML = `
     <header class="app-header">
       <h1>Reprogramação</h1>
@@ -24,13 +22,20 @@ export function startApp(root: HTMLElement): void {
   `;
 
   const screen = root.querySelector<HTMLElement>('#screen')!;
-  const savedName = getUserName();
 
-  if (!savedName) {
-    showNameCard(screen, () => renderRecordingScreen(screen, project));
-  } else {
-    renderRecordingScreen(screen, project);
-  }
+  // Carrega o projeto mais recente do IndexedDB, ou cria um novo
+  listProjects().then((projects) => {
+    const project: Project = projects.length > 0
+      ? projects[projects.length - 1]
+      : createProject('Reprogramação Neural');
+
+    const savedName = getUserName();
+    if (!savedName) {
+      showNameCard(screen, () => renderRecordingScreen(screen, project));
+    } else {
+      renderRecordingScreen(screen, project);
+    }
+  });
 }
 
 export function showNameCard(container: HTMLElement, onDone: () => void): void {
@@ -64,8 +69,8 @@ export function showNameCard(container: HTMLElement, onDone: () => void): void {
     </div>
   `;
 
-  const input  = container.querySelector<HTMLInputElement>('#name-input')!;
-  const btnOk  = container.querySelector<HTMLButtonElement>('#name-confirm')!;
+  const input = container.querySelector<HTMLInputElement>('#name-input')!;
+  const btnOk = container.querySelector<HTMLButtonElement>('#name-confirm')!;
 
   input.addEventListener('input', () => {
     btnOk.disabled = input.value.trim().length === 0;

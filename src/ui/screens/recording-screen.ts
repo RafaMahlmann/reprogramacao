@@ -383,5 +383,17 @@ export function renderRecordingScreen(root: HTMLElement, project: Project): void
 
   elText.addEventListener('input', () => { current().text = elText.value; });
 
+  // Carrega clips salvos do IndexedDB para restaurar gravações anteriores
+  async function loadSavedClips() {
+    for (const cmd of project.commands) {
+      if (cmd.recordingId && !clips.has(cmd.recordingId)) {
+        const clip = await clipStore.get(cmd.recordingId);
+        if (clip) clips.set(cmd.recordingId, clip);
+      }
+    }
+    render();
+  }
+
   render();
+  void loadSavedClips();
 }
