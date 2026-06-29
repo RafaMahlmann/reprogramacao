@@ -12,6 +12,8 @@
  *    (relógio do AudioContext — nada de setTimeout para o áudio em si).
  */
 import type { AudioClip, Project } from '../../core/types';
+import { VoiceEffectChain } from './voice-effects';
+import { bufferFromClip } from './playback';
 
 export interface SessionEvent {
   startSec: number;
@@ -82,6 +84,7 @@ export class SessionPlayer {
   private ctx: AudioContext | null = null;
   private musicGain: GainNode | null = null;
   private voiceGain: GainNode | null = null;
+  private voiceFx: VoiceEffectChain | null = null;
   private musicSource: MediaElementAudioSourceNode | null = null;
   private active = new Set<AudioBufferSourceNode>();
 
@@ -127,6 +130,8 @@ export class SessionPlayer {
 
   setMusicVolume(v: number) { if (this.musicGain) this.musicGain.gain.value = v; }
   setVoiceVolume(v: number) { if (this.voiceGain) this.voiceGain.gain.value = v; }
+  setVoicePreset(id: string, intensity: number) { this.voiceFx?.set(id, intensity); }
+  setVoiceIntensity(i: number) { this.voiceFx?.setIntensity(i); }
 
   private ensureGraph() {
     if (this.ctx) return;
@@ -134,7 +139,10 @@ export class SessionPlayer {
     this.ctx = ctx;
     this.voiceGain = ctx.createGain();
     this.voiceGain.gain.value = this.settings.voiceVolume;
-    this.voiceGain.connect(ctx.destination);
+    // Voz → volume → cadeia de efeitos → saída
+    this.voiceFx = new VoiceEffectChain(ctx, ctx.destination);
+    this.voiceFx.set(this.settings.voicePreset, this.settings.voiceEffectIntensity);
+    this.voiceGain.connect(this.voiceFx.input);
 
     if (this.musicEl) {
       this.musicEl.loop = true;
@@ -276,8 +284,7 @@ export class SessionPlayer {
   private scheduleEvent(ev: SessionEvent, ctx: AudioContext, atTime?: number, offset = 0) {
     const clip = this.clips.get(ev.recordingId);
     if (!clip) return;
-    const buffer = ctx.createBuffer(clip.channels.length, clip.channels[0].length, clip.sampleRate);
-    clip.channels.forEach((data, ch) => buffer.copyToChannel(data as Float32Array<ArrayBuffer>, ch));
+    const buffer = bufferFromClip(ctx, clip);
     const src = ctx.createBufferSource();
     src.buffer = buffer;
     src.connect(this.voiceGain!);

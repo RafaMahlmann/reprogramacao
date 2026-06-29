@@ -14,7 +14,12 @@ function ctx(): AudioContext {
 }
 
 export function clipToAudioBuffer(clip: AudioClip): AudioBuffer {
-  const buffer = ctx().createBuffer(clip.channels.length, clip.channels[0].length, clip.sampleRate);
+  return bufferFromClip(ctx(), clip);
+}
+
+/** Cria um AudioBuffer de um clip num contexto específico. */
+export function bufferFromClip(audioCtx: BaseAudioContext, clip: AudioClip): AudioBuffer {
+  const buffer = audioCtx.createBuffer(clip.channels.length, clip.channels[0].length, clip.sampleRate);
   clip.channels.forEach((data, ch) => buffer.copyToChannel(data as Float32Array<ArrayBuffer>, ch));
   return buffer;
 }

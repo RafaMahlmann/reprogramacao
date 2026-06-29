@@ -679,6 +679,67 @@ body {
   accent-color: var(--accent);
 }
 
+/* ---------- Efeitos na voz ---------- */
+.fx-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 0.6rem;
+}
+.fx-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+.fx-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  text-align: center;
+  padding: 0.7rem 0.5rem;
+  border: 1px solid #2c313d;
+  background: var(--surface-2);
+  border-radius: 12px;
+  cursor: pointer;
+  color: var(--text);
+}
+.fx-card:hover { border-color: var(--accent); }
+.fx-card.is-sel { border-color: var(--accent); background: rgba(108,140,255,0.15); }
+.fx-icon { font-size: 1.3rem; }
+.fx-name { font-size: 0.82rem; font-weight: 600; }
+.fx-desc { font-size: 0.68rem; color: var(--muted); }
+
+.fx-intensity {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin-bottom: 0.9rem;
+}
+.fx-intensity output { color: var(--text); font-weight: 600; }
+.fx-intensity input { accent-color: var(--accent); }
+.fx-intensity.is-off { opacity: 0.4; pointer-events: none; }
+
+.fx-ab {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.5rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+.fx-ab-btn {
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid #2c313d;
+  font-size: 0.82rem;
+  padding: 0.45rem 0.9rem;
+}
+
 /* ---------- Transporte ---------- */
 .sess-transport {
   display: flex;

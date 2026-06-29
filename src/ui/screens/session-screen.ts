@@ -14,6 +14,8 @@ import { saveProject } from '../../modules/project/project-service';
 import { computeSchedule, SessionPlayer, type SessionSchedule } from '../../modules/audio/session-engine';
 import { BUILTIN_TRACKS, renderBuiltinTrack } from '../../modules/audio/builtin-tracks';
 import { getRecents, addRecent } from '../../modules/audio/music-recents';
+import { VOICE_PRESETS, VoiceEffectChain } from '../../modules/audio/voice-effects';
+import { bufferFromClip } from '../../modules/audio/playback';
 import { showRecording } from '../app';
 import { uid } from '../../core/id';
 
@@ -65,6 +67,8 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
         </label>
       </div>
 
+      <div id="fx-section"></div>
+
       <div class="sess-controls">
         <label>Intervalo entre comandos
           <span class="sess-stepper" data-key="gapBetweenCommandsSec">
@@ -108,7 +112,7 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
   }
   makePlayer();
 
-  $('#back').onclick = () => { player.dispose(); showRecording(project); };
+  $('#back').onclick = () => { previewStop?.(); player.dispose(); showRecording(project); };
 
   // ---- Volumes ----
   const mv = $<HTMLInputElement>('#mv');
@@ -144,6 +148,79 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
     if (key === 'gapBetweenCommandsSec') s.gapBetweenCommandsSec = Math.max(0, s.gapBetweenCommandsSec + d);
     else if (key === 'gapAfterLastCommandSec') s.gapAfterLastCommandSec = Math.max(0, s.gapAfterLastCommandSec + d);
     else if (key === 'targetDurationMin') s.targetDurationSec = Math.max(60, s.targetDurationSec + d * 60);
+  }
+
+  // ---- Efeitos na voz ----
+  function renderFxSection() {
+    const fx = $('#fx-section');
+    fx.innerHTML = `
+      <div class="fx-title">🎛️ Efeitos na voz</div>
+      <div class="fx-cards">
+        ${VOICE_PRESETS.map((p) => `
+          <button class="fx-card ${s.voicePreset === p.id ? 'is-sel' : ''}" data-fx="${p.id}">
+            <span class="fx-icon">${p.icon}</span>
+            <span class="fx-name">${p.name}</span>
+            <span class="fx-desc">${p.desc}</span>
+          </button>`).join('')}
+      </div>
+      <label class="fx-intensity ${s.voicePreset === 'none' ? 'is-off' : ''}">
+        Intensidade <output id="fi-out">${Math.round(s.voiceEffectIntensity * 100)}%</output>
+        <input type="range" id="fi" min="0" max="100" value="${Math.round(s.voiceEffectIntensity * 100)}">
+      </label>
+      <div class="fx-ab">
+        <span>Comparar no trecho atual:</span>
+        <button class="btn fx-ab-btn" id="ab-on">▶ Com efeito</button>
+        <button class="btn fx-ab-btn" id="ab-off">▶ Sem efeito</button>
+      </div>
+    `;
+
+    fx.querySelectorAll<HTMLButtonElement>('[data-fx]').forEach((b) => {
+      b.onclick = () => {
+        s.voicePreset = b.dataset.fx!;
+        player.setVoicePreset(s.voicePreset, s.voiceEffectIntensity);
+        void saveProject(project);
+        renderFxSection();
+      };
+    });
+
+    const fi = fx.querySelector<HTMLInputElement>('#fi')!;
+    fi.oninput = () => {
+      s.voiceEffectIntensity = +fi.value / 100;
+      fx.querySelector('#fi-out')!.textContent = `${fi.value}%`;
+    };
+    fi.onchange = () => {
+      player.setVoiceIntensity(s.voiceEffectIntensity);
+      void saveProject(project);
+    };
+
+    fx.querySelector<HTMLButtonElement>('#ab-on')!.onclick = () => previewTrecho(true);
+    fx.querySelector<HTMLButtonElement>('#ab-off')!.onclick = () => previewTrecho(false);
+  }
+
+  // A/B: toca o comando no ponto atual da régua, com ou sem efeito
+  let previewStop: (() => void) | null = null;
+  function previewTrecho(withEffect: boolean) {
+    previewStop?.();
+    if (player.isPlaying) { player.pause(); btnPlay.textContent = '▶'; }
+    const pos = player.position;
+    const ev = schedule.events.find((e) => e.startSec <= pos && pos < e.startSec + e.durationSec)
+      ?? schedule.events[0];
+    if (!ev) return;
+    const clip = clips.get(ev.recordingId);
+    if (!clip) return;
+    const ctx = new AudioContext();
+    const src = ctx.createBufferSource();
+    src.buffer = bufferFromClip(ctx, clip);
+    if (withEffect && s.voicePreset !== 'none') {
+      const chain = new VoiceEffectChain(ctx, ctx.destination);
+      chain.set(s.voicePreset, s.voiceEffectIntensity);
+      src.connect(chain.input);
+    } else {
+      src.connect(ctx.destination);
+    }
+    src.start();
+    src.onended = () => { void ctx.close(); previewStop = null; };
+    previewStop = () => { try { src.stop(); } catch { /* noop */ } void ctx.close(); previewStop = null; };
   }
 
   // ---- Aplicar uma música (de qualquer fonte) ----
@@ -309,6 +386,7 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
     }
   }
 
+  renderFxSection();
   renderMusicSection();
   redraw(0);
 }

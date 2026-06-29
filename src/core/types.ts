@@ -52,6 +52,10 @@ export interface ProjectSettings {
   /** Fade in/out da música em segundos. */
   fadeInSec: number;
   fadeOutSec: number;
+  /** Preset de efeito aplicado à voz ('none' = natural). */
+  voicePreset: string;
+  /** Intensidade do efeito de voz (0..1). */
+  voiceEffectIntensity: number;
 }
 
 export interface Project {
@@ -74,6 +78,8 @@ export const DEFAULT_SETTINGS: ProjectSettings = {
   voiceVolume: 1,
   fadeInSec: 3,
   fadeOutSec: 5,
+  voicePreset: 'none',
+  voiceEffectIntensity: 0.5,
 };
 
 /** Áudio em memória, sempre em Float32 (sem perdas) para preservar fidelidade. */
