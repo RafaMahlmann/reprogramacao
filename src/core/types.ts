@@ -43,6 +43,13 @@ export interface ProjectSettings {
   gapBetweenCommandsSec: number;
   /** Intervalo (s) após o último comando antes de reiniciar a sequência. */
   gapAfterLastCommandSec: number;
+  /** Duração alvo da sessão em segundos (padrão 3600 = 1h). */
+  targetDurationSec: number;
+  /** Volume da música de fundo (0..1). */
+  musicVolume: number;
+  /** Fade in/out da música em segundos. */
+  fadeInSec: number;
+  fadeOutSec: number;
 }
 
 export interface Project {
@@ -60,6 +67,10 @@ export const DEFAULT_SETTINGS: ProjectSettings = {
   bitDepth: 24,
   gapBetweenCommandsSec: 2,
   gapAfterLastCommandSec: 5,
+  targetDurationSec: 3600,
+  musicVolume: 0.5,
+  fadeInSec: 3,
+  fadeOutSec: 5,
 };
 
 /** Áudio em memória, sempre em Float32 (sem perdas) para preservar fidelidade. */

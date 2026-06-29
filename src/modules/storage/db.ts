@@ -12,9 +12,10 @@
 import type { AudioClip, Project } from '../../core/types';
 
 const DB_NAME = 'reprogramacao';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_PROJECTS = 'projects';
 const STORE_CLIPS = 'clips';
+const STORE_MEDIA = 'media';
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -29,6 +30,9 @@ function openDb(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(STORE_CLIPS)) {
         db.createObjectStore(STORE_CLIPS);
+      }
+      if (!db.objectStoreNames.contains(STORE_MEDIA)) {
+        db.createObjectStore(STORE_MEDIA);
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -96,4 +100,14 @@ export const clipStore = {
       },
     }));
   },
+};
+
+/**
+ * Armazena mídia bruta (Blob), como a música de fundo. Guardamos o arquivo
+ * original sem decodificar — seguro para arquivos longos (1h+).
+ */
+export const mediaStore = {
+  save: (id: string, blob: Blob) => tx(STORE_MEDIA, 'readwrite', (s) => s.put(blob, id)),
+  get: (id: string) => tx<Blob | undefined>(STORE_MEDIA, 'readonly', (s) => s.get(id)),
+  delete: (id: string) => tx(STORE_MEDIA, 'readwrite', (s) => s.delete(id)),
 };

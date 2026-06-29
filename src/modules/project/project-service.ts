@@ -70,7 +70,14 @@ export function listProjects(): Promise<Project[]> {
 export async function loadMostRecentProject(): Promise<Project | undefined> {
   const projects = await projectStore.list();
   if (projects.length === 0) return undefined;
-  return projects.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))[0];
+  const latest = projects.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))[0];
+  return normalizeProject(latest);
+}
+
+/** Garante que projetos antigos tenham todos os campos de configuração atuais. */
+export function normalizeProject(project: Project): Project {
+  project.settings = { ...DEFAULT_SETTINGS, ...project.settings };
+  return project;
 }
 
 export function loadProject(id: string): Promise<Project | undefined> {

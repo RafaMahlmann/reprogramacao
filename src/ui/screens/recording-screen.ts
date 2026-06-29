@@ -13,7 +13,7 @@ import type { TeleprompterHandle } from '../../modules/teleprompter/teleprompter
 import { saveProject } from '../../modules/project/project-service';
 import { clipStore } from '../../modules/storage/db';
 import { uid } from '../../core/id';
-import { getUserName, setUserName, showNameCard } from '../app';
+import { getUserName, setUserName, showNameCard, showSession } from '../app';
 import { downloadClipsSequential, downloadBlob } from '../../modules/export/download';
 import { buildProjectFile, importProjectFile } from '../../modules/project/project-file';
 
@@ -110,6 +110,8 @@ export function renderRecordingScreen(root: HTMLElement, project: Project): void
         <div class="rec-controls"></div>
         <div class="rec-export" style="display:none"></div>
 
+        <button class="btn btn-next-step" id="btn-next-step">🎚️ Próxima etapa: Música e sequência →</button>
+
         <div class="rec-project-actions">
           <button class="btn btn-project" id="btn-save-project">💾 Salvar projeto (.rpn)</button>
           <label class="btn btn-project" for="open-file">📂 Abrir projeto (.rpn)</label>
@@ -119,6 +121,7 @@ export function renderRecordingScreen(root: HTMLElement, project: Project): void
       </section>
     `;
 
+    root.querySelector<HTMLButtonElement>('#btn-next-step')!.onclick = () => showSession(project);
     root.querySelector<HTMLButtonElement>('#btn-save-project')!.onclick = saveProjectFile;
     root.querySelector<HTMLInputElement>('#open-file')!.onchange = openProjectFile;
 

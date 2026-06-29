@@ -2,8 +2,19 @@ import { createProject, loadMostRecentProject } from '../modules/project/project
 import type { Project } from '../core/types';
 import { renderRecordingScreen } from './screens/recording-screen';
 import { renderSavedAudiosScreen } from './screens/saved-audios-screen';
+import { renderSessionScreen } from './screens/session-screen';
 
 const NAME_KEY = 'reprogramacao:userName';
+
+let screenEl: HTMLElement | null = null;
+
+/** Navegação entre telas (usada pelos botões "Próxima etapa" / "Voltar"). */
+export function showRecording(project: Project): void {
+  if (screenEl) renderRecordingScreen(screenEl, project);
+}
+export function showSession(project: Project): void {
+  if (screenEl) void renderSessionScreen(screenEl, project);
+}
 
 export function getUserName(): string {
   return localStorage.getItem(NAME_KEY) ?? '';
@@ -28,6 +39,7 @@ export function startApp(root: HTMLElement): void {
   `;
 
   const screen = root.querySelector<HTMLElement>('#screen')!;
+  screenEl = screen;
 
   function openRecording() {
     loadMostRecentProject().then((existing) => {

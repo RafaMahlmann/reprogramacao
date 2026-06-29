@@ -490,3 +490,99 @@ body {
   margin: 0.5rem 0 0;
   line-height: 1.5;
 }
+
+.btn-next-step {
+  width: 100%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 1rem;
+  padding: 0.85rem;
+  border-radius: 10px;
+  margin-top: 1.5rem;
+}
+
+/* ---------- Tela de Sessão ---------- */
+.sess-title {
+  font-size: 1.2rem;
+  margin: 0.75rem 0 1rem;
+}
+
+.sess-music {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
+  flex-wrap: wrap;
+}
+
+.sess-music-name {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.sess-controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.sess-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.sess-stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: var(--surface-2);
+  border-radius: 999px;
+  padding: 0.25rem 0.4rem;
+  width: fit-content;
+}
+
+.sess-stepper button {
+  border: none;
+  background: var(--surface);
+  color: var(--text);
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  font-size: 1.1rem;
+  cursor: pointer;
+}
+
+.sess-stepper b {
+  min-width: 56px;
+  text-align: center;
+  color: var(--text);
+  font-size: 0.9rem;
+}
+
+.sess-timeline {
+  width: 100%;
+  height: 150px;
+  background: var(--surface-2);
+  border-radius: 10px;
+  margin-bottom: 0.75rem;
+}
+
+.sess-info {
+  font-size: 0.88rem;
+  color: var(--muted);
+  margin-bottom: 1.25rem;
+}
+
+.sess-info strong { color: var(--text); }
+
+.sess-warn { color: #ffcf6a; }
+
+.sess-play .btn-rec {
+  width: 100%;
+  padding: 0.85rem;
+  font-size: 1rem;
+}
