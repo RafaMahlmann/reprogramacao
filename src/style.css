@@ -776,6 +776,43 @@ body {
 
 .sess-warn { color: #ffcf6a; }
 
+.sess-num {
+  background: var(--surface-2);
+  border: 1px solid #2c313d;
+  border-radius: 999px;
+  color: var(--text);
+  padding: 0.35rem 0.7rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  width: 90px;
+}
+
+/* ---------- Exportação ---------- */
+#export-section {
+  margin-top: 1.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid #2c313d;
+}
+.export-title2 { font-size: 1.05rem; font-weight: 600; margin-bottom: 0.4rem; }
+.export-sub { font-size: 0.83rem; color: var(--muted); margin: 0 0 0.9rem; }
+.export-sub strong { color: var(--text); }
+.export-buttons { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+.btn-export {
+  flex: 1; min-width: 140px;
+  background: var(--accent); color: #fff;
+  font-size: 1rem; padding: 0.85rem; border-radius: 10px;
+}
+.btn-export-2 {
+  flex: 1; min-width: 140px;
+  background: var(--surface-2); color: var(--text);
+  border: 1px solid #2c313d;
+  font-size: 1rem; padding: 0.85rem; border-radius: 10px;
+}
+.export-progress { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.9rem; }
+.export-bar { height: 10px; background: var(--surface-2); border-radius: 999px; overflow: hidden; }
+.export-bar-fill { height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), #9db6ff); transition: width 0.2s; }
+#exp-status { font-size: 0.82rem; color: var(--muted); }
+
 .sess-play .btn-rec {
   width: 100%;
   padding: 0.85rem;

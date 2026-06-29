@@ -16,7 +16,9 @@ import { getRecents, addRecent } from '../../modules/audio/music-recents';
 import { VOICE_PRESETS, VoiceEffectChain, DEFAULT_INTENSITY, type StackItem } from '../../modules/audio/voice-effects';
 import { bufferFromClip } from '../../modules/audio/playback';
 import { detectTuning } from '../../modules/pitch/pitch-detector';
-import { showRecording } from '../app';
+import { exportSession, type ExportFormat } from '../../modules/export/exporter';
+import { downloadBlob } from '../../modules/export/download';
+import { showRecording, getUserName } from '../app';
 import { uid } from '../../core/id';
 
 function fmt(sec: number): string {
@@ -90,10 +92,8 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
             <button data-d="-1">−</button><b>${s.gapAfterLastCommandSec}s</b><button data-d="1">+</button>
           </span>
         </label>
-        <label>Duração alvo
-          <span class="sess-stepper" data-key="targetDurationMin">
-            <button data-d="-5">−</button><b>${Math.round(s.targetDurationSec / 60)} min</b><button data-d="5">+</button>
-          </span>
+        <label>Duração alvo (min)
+          <input class="sess-num" type="number" id="target-min" min="1" max="120" step="0.1" value="${(s.targetDurationSec / 60).toFixed(1)}">
         </label>
       </div>
 
@@ -106,6 +106,8 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
       </div>
 
       <div class="sess-info"></div>
+
+      <div id="export-section"></div>
     </section>
   `;
 
@@ -153,20 +155,33 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
         btnPlay.textContent = '▶';
         void saveProject(project);
         redraw(0);
+        renderExportSection();
       };
     });
   });
   function stepperLabel(key: string): string {
     if (key === 'gapBetweenCommandsSec') return `${s.gapBetweenCommandsSec}s`;
     if (key === 'gapAfterLastCommandSec') return `${s.gapAfterLastCommandSec}s`;
-    if (key === 'targetDurationMin') return `${Math.round(s.targetDurationSec / 60)} min`;
     return '';
   }
   function applyStep(key: string, d: number) {
     if (key === 'gapBetweenCommandsSec') s.gapBetweenCommandsSec = Math.max(0, s.gapBetweenCommandsSec + d);
     else if (key === 'gapAfterLastCommandSec') s.gapAfterLastCommandSec = Math.max(0, s.gapAfterLastCommandSec + d);
-    else if (key === 'targetDurationMin') s.targetDurationSec = Math.max(60, s.targetDurationSec + d * 60);
   }
+
+  const targetIn = $<HTMLInputElement>('#target-min');
+  targetIn.onchange = () => {
+    const mins = Math.max(1, Math.min(120, Number(targetIn.value) || 1));
+    s.targetDurationSec = mins * 60;
+    targetIn.value = mins.toFixed(1);
+    player.reset();
+    schedule = computeSchedule(project, clips);
+    player.updateSchedule(schedule);
+    btnPlay.textContent = '▶';
+    void saveProject(project);
+    redraw(0);
+    renderExportSection();
+  };
 
   // ---- Efeitos na voz (empilháveis) ----
   function stackItems(): StackItem[] {
@@ -513,8 +528,73 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
     }
   }
 
+  // ---- Exportação ----
+  function renderExportSection() {
+    const ex = $('#export-section');
+    const ready = schedule.recorded.length > 0;
+    ex.innerHTML = `
+      <div class="export-title2">📤 Exportar sessão</div>
+      ${ready ? `
+        <p class="export-sub">Gera um arquivo único com tudo: voz + efeitos + música + 432 + intervalos + loop. Duração: <strong>${fmt(schedule.totalSec)}</strong>.</p>
+        <div class="export-buttons">
+          <button class="btn btn-export" id="exp-mp3">⬇ MP3 320k</button>
+          <button class="btn btn-export-2" id="exp-wav">⬇ WAV 24-bit</button>
+        </div>
+        <div class="export-progress" id="exp-progress" style="display:none">
+          <div class="export-bar"><div class="export-bar-fill" id="exp-fill"></div></div>
+          <span id="exp-status"></span>
+        </div>
+      ` : `<p class="fx-none">Grave os comandos antes de exportar.</p>`}
+    `;
+    if (!ready) return;
+    ex.querySelector<HTMLButtonElement>('#exp-mp3')!.onclick = () => runExport('mp3');
+    ex.querySelector<HTMLButtonElement>('#exp-wav')!.onclick = () => runExport('wav');
+  }
+
+  async function runExport(format: ExportFormat) {
+    if (musicEl && musicEl.duration > 1200) {
+      alert('A trilha de fundo é longa demais para exportar (estoura a memória do navegador). Use uma trilha mais curta — ela fica em loop e preenche a sessão toda igual. (Ou remova a música.)');
+      return;
+    }
+    if (format === 'wav' && schedule.totalSec > 1500) {
+      if (!confirm('WAV de sessão longa fica gigante (vários GB) e pode falhar no navegador. Recomendo o MP3. Quer continuar mesmo assim?')) return;
+    }
+    player.pause();
+    const fill = $('#exp-fill');
+    const status = $('#exp-status');
+    $('#exp-progress').style.display = 'flex';
+    const m3 = $<HTMLButtonElement>('#exp-mp3');
+    const wv = $<HTMLButtonElement>('#exp-wav');
+    m3.disabled = true; wv.disabled = true;
+    status.textContent = musicBlob ? 'Preparando música…' : 'Renderizando…';
+    try {
+      let musicBuffer: AudioBuffer | null = null;
+      if (musicBlob) {
+        const dctx = new OfflineAudioContext(1, 1, s.sampleRate);
+        musicBuffer = await dctx.decodeAudioData(await musicBlob.arrayBuffer());
+      }
+      const blob = await exportSession({
+        project, clips, musicBuffer, musicRate: currentTuningRate(), format,
+        onProgress: (f) => {
+          fill.style.width = `${Math.round(f * 100)}%`;
+          status.textContent = `Renderizando… ${Math.round(f * 100)}%`;
+        },
+      });
+      status.textContent = '✓ Pronto! Baixando…';
+      const safe = (getUserName() ? `Reprogramação - ${getUserName()}` : 'Reprogramação').replace(/[\\/:*?"<>|]/g, '');
+      downloadBlob(blob, `${safe}.${format}`);
+      setTimeout(() => { $('#exp-progress').style.display = 'none'; fill.style.width = '0%'; }, 2000);
+    } catch (err) {
+      console.error(err);
+      status.textContent = '⚠ Falha na exportação. Tente uma trilha menor ou uma duração menor.';
+    } finally {
+      m3.disabled = false; wv.disabled = false;
+    }
+  }
+
   renderFxSection();
   renderMusicSection();
+  renderExportSection();
   redraw(0);
 
   // Carrega a música existente em segundo plano (não bloqueia a tela)
