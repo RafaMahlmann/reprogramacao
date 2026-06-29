@@ -43,6 +43,7 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
   let musicEl: HTMLAudioElement | null = null;
   let musicName = project.music?.name ?? '';
   let musicSize = 0;
+  let musicNote = '';
   let schedule: SessionSchedule = computeSchedule(project, clips);
   let player: SessionPlayer;
 
@@ -257,28 +258,47 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
   }
 
   // ---- Aplicar uma música (de qualquer fonte) ----
+  // Estratégia para arquivos grandes (até centenas de MB): preparar a
+  // reprodução IMEDIATAMENTE (streaming via object URL, sem carregar tudo na
+  // memória) e guardar no banco em SEGUNDO PLANO, com aviso se falhar.
   async function applyMusic(blob: Blob, name: string, id: string, isBuiltin = false) {
     player.dispose();
-    await mediaStore.save(id, blob);
     musicEl = makeAudio(blob);
     musicName = name;
     musicSize = blob.size;
+    musicNote = 'Lendo duração…';
+    renderMusicSection(); // mostra nome + tamanho na hora
+
     await waitDuration(musicEl);
     const dur = isFinite(musicEl.duration) ? musicEl.duration : 0;
     project.music = { id, name, recordingId: id, durationSec: dur, tuneTo432: false };
-    await saveProject(project);
-    if (!isBuiltin) addRecent({ id, name });
     makePlayer();
     btnPlay.textContent = '▶';
+    musicNote = blob.size > 80e6 ? 'Guardando no navegador… (pode levar alguns segundos)' : '';
     renderMusicSection();
     redraw(0);
+
+    // Persiste em segundo plano (não trava a UI nem a reprodução)
+    void persistMusic(id, blob, name, isBuiltin);
+  }
+
+  async function persistMusic(id: string, blob: Blob, name: string, isBuiltin: boolean) {
+    try {
+      if (blob.size > 0) await mediaStore.save(id, blob);
+      if (!isBuiltin) addRecent({ id, name });
+      musicNote = '';
+    } catch (err) {
+      console.error('Falha ao guardar música:', err);
+      musicNote = '⚠ Música grande demais para guardar permanentemente. Ela funciona agora, mas talvez não reabra depois — considere um arquivo menor ou mais curto.';
+    }
+    try { await saveProject(project); } catch { /* ignore */ }
+    renderMusicSection();
   }
 
   // ---- Seção de música (reconstruída a cada mudança) ----
   function renderMusicSection() {
     const sec = $('#music-section');
     const dur = musicEl && isFinite(musicEl.duration) ? musicEl.duration : 0;
-    const unsupported = musicName && dur === 0;
 
     sec.innerHTML = `
       <div class="music-drop" id="drop">
@@ -312,11 +332,11 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
       </div>` : ''}
 
       <div class="music-current">
-        ${musicName
-          ? unsupported
-            ? `<span class="sess-warn">⚠ "${musicName}" — formato não suportado pelo navegador. Tente MP3, M4A, WAV ou OGG.</span>`
-            : `🎵 <strong>${musicName}</strong> · ${fmt(dur)}${musicSize ? ' · ' + fmtBytes(musicSize) : ''}`
-          : '<span class="music-none">Nenhuma música escolhida</span>'}
+        ${musicName ? `
+          🎵 <strong>${musicName}</strong>${dur ? ' · ' + fmt(dur) : ''}${musicSize ? ' · ' + fmtBytes(musicSize) : ''}
+          ${musicNote ? `<div class="${musicNote.startsWith('⚠') ? 'sess-warn' : 'music-note'}">${musicNote}</div>` : ''}
+          ${!musicNote && dur === 0 ? `<div class="sess-warn">⚠ Formato pode não ser suportado pelo navegador. Tente MP3, M4A, WAV ou OGG.</div>` : ''}
+        ` : '<span class="music-none">Nenhuma música escolhida</span>'}
       </div>
     `;
 
@@ -434,7 +454,7 @@ function waitDuration(el: HTMLAudioElement): Promise<void> {
     if (el.readyState >= 1 && isFinite(el.duration)) return resolve();
     el.addEventListener('loadedmetadata', () => resolve(), { once: true });
     el.addEventListener('error', () => resolve(), { once: true });
-    setTimeout(resolve, 4000);
+    setTimeout(resolve, 20000);
   });
 }
 

@@ -585,6 +585,7 @@ body {
 }
 .music-current strong { color: var(--text); }
 .music-none { color: var(--muted); }
+.music-note { color: var(--muted); font-size: 0.8rem; margin-top: 0.25rem; }
 
 .sess-controls {
   display: grid;
