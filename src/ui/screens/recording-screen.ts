@@ -14,6 +14,7 @@ import type { TeleprompterHandle } from '../../modules/teleprompter/teleprompter
 import { saveProject } from '../../modules/project/project-service';
 import { clipStore } from '../../modules/storage/db';
 import { uid } from '../../core/id';
+import { getUserName, showNameCard } from '../app';
 
 const COMMAND_LABELS = [
   'Estado Delta — acalmar a mente',
@@ -24,6 +25,12 @@ const COMMAND_LABELS = [
   'Sintonização com frequências elevadas',
   'Fechamento — conclusão de todos os comandos',
 ];
+
+/** Substitui (seu nome) pelo nome do usuário no texto do comando. */
+function applyName(text: string): string {
+  const name = getUserName();
+  return name ? text.replace(/\(seu nome\)/gi, name) : text;
+}
 
 export function renderRecordingScreen(root: HTMLElement, project: Project): void {
   let index = 0;
@@ -38,9 +45,11 @@ export function renderRecordingScreen(root: HTMLElement, project: Project): void
 
   root.innerHTML = `
     <section class="rec">
-      <div class="rec-progress"></div>
+      <div class="rec-top-bar">
+        <div class="rec-progress"></div>
+        <button class="btn-link" id="btn-change-name">Trocar nome</button>
+      </div>
       <div class="rec-label"></div>
-      <div class="rec-name-hint">Substitua <strong>(seu nome)</strong> pelo seu nome antes de gravar.</div>
       <textarea class="rec-text" rows="5" spellcheck="false"></textarea>
 
       <div class="rec-viz">
@@ -68,6 +77,9 @@ export function renderRecordingScreen(root: HTMLElement, project: Project): void
   const elProgress  = root.querySelector<HTMLElement>('.rec-progress')!;
   const elLabel     = root.querySelector<HTMLElement>('.rec-label')!;
   const elText      = root.querySelector<HTMLTextAreaElement>('.rec-text')!;
+  const btnChangeName = root.querySelector<HTMLButtonElement>('#btn-change-name')!;
+  btnChangeName.onclick = () =>
+    showNameCard(root, () => renderRecordingScreen(root, project));
   const elPrompter  = root.querySelector<HTMLElement>('.rec-prompter')!;
   const elStatus    = root.querySelector<HTMLElement>('.rec-status')!;
   const elControls  = root.querySelector<HTMLElement>('.rec-controls')!;
@@ -148,7 +160,7 @@ export function renderRecordingScreen(root: HTMLElement, project: Project): void
     const cmd = current();
     elProgress.textContent = `Comando ${index + 1} de ${project.commands.length}`;
     elLabel.textContent    = COMMAND_LABELS[index] ?? '';
-    elText.value           = cmd.text;
+    elText.value           = applyName(cmd.text);
     elPrompter.innerHTML   = '';
     clearWave();
     showPlayAnim(false);
@@ -217,8 +229,8 @@ export function renderRecordingScreen(root: HTMLElement, project: Project): void
     elStatus.textContent = '🔴 Gravando…';
     renderControls(false, true);
     // Realce sincrônico desabilitado — manter para reativar futuramente
-    // teleprompter = runTeleprompter(elPrompter, current().text, { wpm });
-    elPrompter.textContent = current().text;
+    // teleprompter = runTeleprompter(elPrompter, applyName(current().text), { wpm });
+    elPrompter.textContent = applyName(current().text);
   }
 
   function stopRecording() {
