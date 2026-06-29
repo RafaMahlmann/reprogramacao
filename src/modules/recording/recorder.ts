@@ -84,6 +84,19 @@ export class VoiceRecorder {
     return { channels, sampleRate: this.ctx.sampleRate, durationSec };
   }
 
+  /**
+   * Cria um AnalyserNode conectado ao microfone para visualização em tempo real.
+   * Deve ser chamado após init(). O analyser é desconectado quando stop() é chamado.
+   */
+  createAnalyser(): AnalyserNode {
+    if (!this.ctx || !this.source) throw new Error('Recorder não inicializado.');
+    const analyser = this.ctx.createAnalyser();
+    analyser.fftSize = 512;
+    analyser.smoothingTimeConstant = 0.7;
+    this.source.connect(analyser);
+    return analyser;
+  }
+
   /** Libera microfone e contexto de áudio. */
   async dispose(): Promise<void> {
     this.stream?.getTracks().forEach((t) => t.stop());
