@@ -53,7 +53,8 @@ export function renderRecordingScreen(root: HTMLElement, project: Project): void
       <div class="rec-prompter" aria-live="polite"></div>
       <div class="rec-status"></div>
 
-      <div class="rec-wpm-panel">
+      <!-- Painel de velocidade oculto — reativar junto com o realce sincrônico -->
+      <div class="rec-wpm-panel" style="display:none">
         <button class="btn btn-wpm" id="wpm-down" aria-label="Diminuir velocidade">−</button>
         <span class="rec-wpm-value" id="wpm-display">${wpm} ppm</span>
         <button class="btn btn-wpm" id="wpm-up" aria-label="Aumentar velocidade">+</button>
