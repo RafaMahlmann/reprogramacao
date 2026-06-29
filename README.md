@@ -38,6 +38,7 @@ npm run preview  # pré-visualiza o build
 - [Arquitetura](docs/ARCHITECTURE.md) — estrutura modular e responsabilidades
 - [Bibliotecas](docs/LIBRARIES.md) — dependências e análise de procedência
 - [Segurança](docs/SECURITY.md) — supply chain e práticas adotadas
+- [Continuidade para IA](docs/CONTINUIDADE.md) — modo de raciocínio + subsídios técnicos por fase
 
 ## Licença
 
