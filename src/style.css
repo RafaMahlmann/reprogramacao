@@ -584,8 +584,31 @@ body {
   min-height: 1.2rem;
 }
 .music-current strong { color: var(--text); }
-.music-none { color: var(--muted); }
-.music-note { color: var(--muted); font-size: 0.8rem; margin-top: 0.25rem; }
+.music-none { color: var(--muted); font-size: 0.85rem; }
+.music-note { color: var(--muted); font-size: 0.8rem; margin-top: 0.5rem; line-height: 1.5; }
+
+/* ---------- Playlist ---------- */
+.playlist { display: flex; flex-direction: column; gap: 0.4rem; margin: 0.75rem 0 0.5rem; }
+.pl-row {
+  display: flex; align-items: center; gap: 0.6rem;
+  background: var(--surface-2); border-radius: 10px; padding: 0.5rem 0.7rem;
+}
+.pl-idx {
+  flex: 0 0 auto; width: 22px; height: 22px; border-radius: 50%;
+  background: rgba(79,208,122,0.2); color: var(--ok);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.72rem; font-weight: 700;
+}
+.pl-info { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.pl-name { font-size: 0.85rem; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pl-meta { font-size: 0.72rem; color: var(--muted); }
+.pl-actions { display: flex; gap: 0.25rem; flex: 0 0 auto; }
+.pl-btn {
+  background: var(--surface); border: 1px solid #2c313d; color: var(--text);
+  width: 26px; height: 26px; border-radius: 6px; cursor: pointer; font-size: 0.7rem;
+}
+.pl-btn:disabled { opacity: 0.35; cursor: default; }
+.pl-del { color: var(--rec); }
 .music-current-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
 .music-current-row .btn-link { flex: 0 0 auto; color: var(--rec); }
 .tuning-box { margin-top: 0.6rem; }
@@ -799,8 +822,24 @@ body {
 .export-buttons { display: flex; gap: 0.6rem; flex-wrap: wrap; }
 .btn-export {
   flex: 1; min-width: 140px;
-  background: var(--accent); color: #fff;
+  background: linear-gradient(135deg, var(--accent), #8a6cff);
+  color: #fff;
   font-size: 1rem; padding: 0.85rem; border-radius: 10px;
+  position: relative; overflow: hidden;
+}
+.btn-export::after {
+  content: ''; position: absolute; top: 0; left: -60%;
+  width: 35%; height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.35), transparent);
+  transform: skewX(-20deg);
+  animation: export-shine 3.5s infinite;
+}
+@keyframes export-shine { 0% { left: -60%; } 55%, 100% { left: 130%; } }
+.btn-export:disabled, .btn-export-2:disabled { opacity: 0.75; cursor: default; }
+.btn-export.exporting, .btn-export-2.exporting { animation: export-pulse 1.2s infinite; }
+@keyframes export-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(108,140,255,0.5); }
+  50%      { box-shadow: 0 0 16px 2px rgba(108,140,255,0.55); }
 }
 .btn-export-2 {
   flex: 1; min-width: 140px;

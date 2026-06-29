@@ -74,31 +74,52 @@ export function computeSchedule(project: Project, clips: Map<string, AudioClip>)
   return { cycleSec, cycles, totalSec, events, recorded };
 }
 
+/** Uma faixa da playlist de fundo. `rate` aplica o ajuste 432 (resample). */
+export interface PlaylistTrack {
+  url: string;
+  durationSec: number;
+  rate: number;
+}
+
+interface MusicSegment {
+  trackIndex: number;
+  startSession: number;
+  endSession: number;
+  rate: number;
+}
+
 /**
- * Player de sessão com transporte completo (play/pause/seek) e volumes
- * independentes (música e voz). Mantém UM AudioContext e UMA rota de música
- * durante toda a vida do player (createMediaElementSource só pode ser chamado
- * uma vez por elemento), então pause/seek reposicionam em vez de recriar.
+ * Player de sessão com transporte (play/pause/seek), volumes independentes e
+ * PLAYLIST de fundo: as músicas tocam em SEQUÊNCIA (sem loop monótono),
+ * preenchendo a duração; se a playlist acabar antes, repete a lista inteira.
+ *
+ * Cada faixa é um <audio> próprio (streaming, seguro p/ arquivos grandes) com
+ * sua própria MediaElementSource. Um "mapa de segmentos" diz qual faixa toca em
+ * cada instante da sessão; o avanço entre faixas é feito no evento 'ended'.
  */
 export class SessionPlayer {
   private ctx: AudioContext | null = null;
   private musicGain: GainNode | null = null;
   private voiceGain: GainNode | null = null;
   private voiceFx: VoiceEffectChain | null = null;
-  private musicSource: MediaElementAudioSourceNode | null = null;
   private active = new Set<AudioBufferSourceNode>();
+
+  private musicEls: HTMLAudioElement[] = [];
+  private segments: MusicSegment[] = [];
+  private curSeg = -1;
+  private activeEl: HTMLAudioElement | null = null;
 
   private schedulerId = 0;
   private rafId = 0;
-  private startCtxTime = 0;   // ctx.currentTime quando o trecho atual começou
-  private startPos = 0;       // posição na sessão (s) no início do trecho
-  private positionSec = 0;    // posição atual quando parado/pausado
+  private startCtxTime = 0;
+  private startPos = 0;
+  private positionSec = 0;
   private nextEventIdx = 0;
   private playing = false;
 
   private schedule: SessionSchedule;
   private readonly clips: Map<string, AudioClip>;
-  private readonly musicEl: HTMLAudioElement | null;
+  private readonly tracks: PlaylistTrack[];
   private readonly settings: Project['settings'];
 
   private onTime?: (sec: number) => void;
@@ -107,13 +128,14 @@ export class SessionPlayer {
   constructor(
     schedule: SessionSchedule,
     clips: Map<string, AudioClip>,
-    musicEl: HTMLAudioElement | null,
+    tracks: PlaylistTrack[],
     settings: Project['settings'],
   ) {
     this.schedule = schedule;
     this.clips = clips;
-    this.musicEl = musicEl;
+    this.tracks = tracks;
     this.settings = settings;
+    this.buildSegments();
   }
 
   get isPlaying(): boolean { return this.playing; }
@@ -126,24 +148,27 @@ export class SessionPlayer {
   updateSchedule(s: SessionSchedule) {
     this.schedule = s;
     if (this.positionSec > s.totalSec) this.positionSec = 0;
+    this.buildSegments();
   }
 
   setMusicVolume(v: number) { if (this.musicGain) this.musicGain.gain.value = v; }
   setVoiceVolume(v: number) { if (this.voiceGain) this.voiceGain.gain.value = v; }
-
-  /**
-   * Ajuste de afinação da música (Opção A): muda a velocidade de reprodução,
-   * o que desloca o pitch de forma limpa (sem artefatos). preservesPitch=false
-   * garante que o pitch acompanhe a velocidade (resampling). rate=1 = sem ajuste.
-   */
-  setMusicRate(rate: number) {
-    if (!this.musicEl) return;
-    this.musicEl.preservesPitch = false;
-    // compatibilidade com navegadores mais antigos
-    (this.musicEl as unknown as { webkitPreservesPitch?: boolean }).webkitPreservesPitch = false;
-    this.musicEl.playbackRate = rate;
-  }
   setVoiceStack(stack: StackItem[]) { this.voiceFx?.setStack(stack); }
+
+  private buildSegments() {
+    this.segments = [];
+    const total = this.schedule.totalSec || 0;
+    if (this.tracks.length === 0 || total <= 0) return;
+    let t = 0; let i = 0; let guard = 0;
+    while (t < total && guard < 100000) {
+      const track = this.tracks[i % this.tracks.length];
+      const rate = track.rate || 1;
+      const segLen = track.durationSec / rate;
+      if (!isFinite(segLen) || segLen <= 0) break;
+      this.segments.push({ trackIndex: i % this.tracks.length, startSession: t, endSession: t + segLen, rate });
+      t += segLen; i++; guard++;
+    }
+  }
 
   private ensureGraph() {
     if (this.ctx) return;
@@ -151,18 +176,57 @@ export class SessionPlayer {
     this.ctx = ctx;
     this.voiceGain = ctx.createGain();
     this.voiceGain.gain.value = this.settings.voiceVolume;
-    // Voz → volume → cadeia de efeitos → saída
     this.voiceFx = new VoiceEffectChain(ctx, ctx.destination);
     this.voiceFx.setStack(this.stackFromSettings());
     this.voiceGain.connect(this.voiceFx.input);
 
-    if (this.musicEl) {
-      this.musicEl.loop = true;
-      this.musicSource = ctx.createMediaElementSource(this.musicEl);
-      this.musicGain = ctx.createGain();
-      this.musicGain.gain.value = this.settings.musicVolume;
-      this.musicSource.connect(this.musicGain).connect(ctx.destination);
-    }
+    this.musicGain = ctx.createGain();
+    this.musicGain.gain.value = this.settings.musicVolume;
+    this.musicGain.connect(ctx.destination);
+
+    this.musicEls = this.tracks.map((t) => {
+      const el = new Audio(t.url);
+      el.preload = 'auto';
+      el.preservesPitch = false;
+      (el as unknown as { webkitPreservesPitch?: boolean }).webkitPreservesPitch = false;
+      el.playbackRate = t.rate || 1;
+      ctx.createMediaElementSource(el).connect(this.musicGain!);
+      return el;
+    });
+  }
+
+  // ---- Sequenciamento da música ----
+  private placeMusic(pos: number) {
+    if (!this.ctx) return;
+    const segIdx = this.segments.findIndex((s) => pos >= s.startSession && pos < s.endSession);
+    if (segIdx < 0) { this.activeEl?.pause(); this.activeEl = null; this.curSeg = -1; return; }
+    const seg = this.segments[segIdx];
+    const el = this.musicEls[seg.trackIndex];
+    if (!el) return;
+    if (this.activeEl && this.activeEl !== el) this.activeEl.pause();
+    this.curSeg = segIdx;
+    this.activeEl = el;
+    el.playbackRate = seg.rate;
+    const off = (pos - seg.startSession) * seg.rate;
+    const max = this.tracks[seg.trackIndex].durationSec - 0.05;
+    try { el.currentTime = Math.max(0, Math.min(off, max)); } catch { /* metadados ainda carregando */ }
+    el.onended = () => this.advanceMusic();
+  }
+
+  private startMusic() { if (this.activeEl) void this.activeEl.play().catch(() => {}); }
+
+  private advanceMusic() {
+    const next = this.curSeg + 1;
+    const seg = this.segments[next];
+    if (this.activeEl) this.activeEl.pause();
+    if (!seg) { this.activeEl = null; return; }
+    this.curSeg = next;
+    const el = this.musicEls[seg.trackIndex];
+    this.activeEl = el;
+    el.playbackRate = seg.rate;
+    try { el.currentTime = 0; } catch { /* noop */ }
+    el.onended = () => this.advanceMusic();
+    if (this.playing) void el.play().catch(() => {});
   }
 
   private stackFromSettings(): StackItem[] {
@@ -187,13 +251,10 @@ export class SessionPlayer {
     this.startPos = this.positionSec;
     this.startCtxTime = ctx.currentTime;
 
-    if (this.musicEl && this.musicEl.duration) {
-      this.musicEl.currentTime = this.startPos % this.musicEl.duration;
-      void this.musicEl.play();
-    }
-
+    this.placeMusic(this.startPos);
     this.primeFrom(this.startPos);
     this.playing = true;
+    this.startMusic();
     this.startScheduler();
     this.startPlayhead();
   }
@@ -207,15 +268,16 @@ export class SessionPlayer {
   /** Move a posição para `sec`. Continua tocando se já estava tocando. */
   seek(sec: number): void {
     const clamped = Math.max(0, Math.min(sec, this.schedule.totalSec));
+    this.positionSec = clamped;
     if (this.playing) {
       this.stopActiveSources();
-      this.positionSec = clamped;
       this.startPos = clamped;
       this.startCtxTime = this.ctx!.currentTime;
-      if (this.musicEl && this.musicEl.duration) this.musicEl.currentTime = clamped % this.musicEl.duration;
       this.primeFrom(clamped);
+      this.placeMusic(clamped);
+      this.startMusic();
     } else {
-      this.positionSec = clamped;
+      this.placeMusic(clamped);
       this.onTime?.(clamped);
     }
   }
@@ -224,7 +286,7 @@ export class SessionPlayer {
   reset(): void {
     this.haltPlayback();
     this.positionSec = 0;
-    if (this.musicEl) this.musicEl.currentTime = 0;
+    this.placeMusic(0);
     this.onTime?.(0);
   }
 
@@ -240,7 +302,7 @@ export class SessionPlayer {
     if (this.schedulerId) { clearInterval(this.schedulerId); this.schedulerId = 0; }
     if (this.rafId) { cancelAnimationFrame(this.rafId); this.rafId = 0; }
     this.stopActiveSources();
-    if (this.musicEl) this.musicEl.pause();
+    this.activeEl?.pause();
   }
 
   private stopActiveSources() {

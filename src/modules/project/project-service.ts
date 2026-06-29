@@ -84,6 +84,8 @@ export function normalizeProject(project: Project): Project {
     project.settings.voiceStack = [old.voicePreset];
   }
   if (!project.settings.voiceIntensities) project.settings.voiceIntensities = {};
+  // Migra música única → playlist
+  if (!project.musicList) project.musicList = project.music ? [project.music] : [];
   return project;
 }
 

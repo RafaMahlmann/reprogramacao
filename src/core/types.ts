@@ -64,7 +64,10 @@ export interface Project {
   createdAt: number;
   updatedAt: number;
   commands: VoiceCommand[];
+  /** @deprecated mantido para migração — use musicList. */
   music?: MusicTrack;
+  /** Playlist de músicas de fundo, tocadas em sequência (sem loop monótono). */
+  musicList?: MusicTrack[];
   settings: ProjectSettings;
 }
 

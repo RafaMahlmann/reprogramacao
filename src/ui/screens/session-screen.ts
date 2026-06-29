@@ -1,18 +1,17 @@
 /**
  * Tela de Sessão: monta e reproduz a sequência final.
  *
- * Música: importar do dispositivo/nuvem (seletor do SO), arrastar e soltar,
- * colar URL, biblioteca interna de trilhas 432 Hz, e recentes. Mostra duração/
- * tamanho e avisa se o formato não for suportado.
+ * Música: PLAYLIST de fundo — várias faixas tocadas em sequência (sem loop
+ * monótono), preenchendo a duração. Cada faixa pode ser detectada/afinada em
+ * 432. Importar do dispositivo/nuvem, arrastar, colar URL.
  *
- * Controles: volumes independentes (música/voz), transporte (play/pause/parar)
- * e busca clicando/arrastando na timeline. Reverb e detecção 432Hz: próximas etapas.
+ * Controles: volumes independentes (música/voz), efeitos de voz empilháveis,
+ * transporte (play/pause/parar), busca na timeline, exportação MP3/WAV.
  */
 import type { AudioClip, Project } from '../../core/types';
 import { clipStore, mediaStore } from '../../modules/storage/db';
 import { saveProject } from '../../modules/project/project-service';
-import { computeSchedule, SessionPlayer, type SessionSchedule } from '../../modules/audio/session-engine';
-import { getRecents, addRecent } from '../../modules/audio/music-recents';
+import { computeSchedule, SessionPlayer, type SessionSchedule, type PlaylistTrack } from '../../modules/audio/session-engine';
 import { VOICE_PRESETS, VoiceEffectChain, DEFAULT_INTENSITY, type StackItem } from '../../modules/audio/voice-effects';
 import { bufferFromClip } from '../../modules/audio/playback';
 import { detectTuning } from '../../modules/pitch/pitch-detector';
@@ -21,23 +20,24 @@ import { downloadBlob } from '../../modules/export/download';
 import { showRecording, getUserName } from '../app';
 import { uid } from '../../core/id';
 
+interface TrackUI {
+  id: string;
+  name: string;
+  blob: Blob;
+  url: string;
+  durationSec: number;
+  detectedTuningHz?: number;
+}
+
 function fmt(sec: number): string {
   const m = Math.floor(sec / 60);
   const s = Math.floor(sec % 60);
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
-function fmtBytes(n: number): string {
-  return n > 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.round(n / 1e3)} KB`;
-}
-
-/** Texto do resultado da detecção de afinação. */
-function tuningText(referenceHz: number): string {
-  const ref = referenceHz.toFixed(1);
-  const cents = 1200 * Math.log2(referenceHz / 432);
-  const rounded = Math.round(cents);
-  if (rounded === 0) return `🎯 Afinação: ~${ref} Hz — já está em 432 Hz.`;
-  const dir = cents > 0 ? 'acima' : 'abaixo';
-  return `🎯 Afinação: ~${ref} Hz · ${Math.abs(rounded)} cents ${dir} de 432 Hz. (ajuste para 432: próxima etapa)`;
+function tuningText(hz: number): string {
+  const cents = Math.round(1200 * Math.log2(hz / 432));
+  if (cents === 0) return `432 Hz ✓`;
+  return `~${hz.toFixed(1)} Hz (${cents > 0 ? '+' : ''}${cents} cents de 432)`;
 }
 
 export async function renderSessionScreen(root: HTMLElement, project: Project): Promise<void> {
@@ -52,16 +52,22 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
   }
 
   const s = project.settings;
-  let musicEl: HTMLAudioElement | null = null;
-  let musicBlob: Blob | null = null;
-  let musicName = project.music?.name ?? '';
-  let musicSize = 0;
-  let musicNote = project.music?.recordingId ? 'Carregando música…' : '';
-  let tuningAnalyzing = false;
+  const playlist: TrackUI[] = [];
+  let tune432 = (project.musicList ?? []).some((t) => t.tuneTo432);
+  const detecting = new Set<string>();
   let schedule: SessionSchedule = computeSchedule(project, clips);
-  let player: SessionPlayer;
+  let player!: SessionPlayer;
+  let seeking = false;
 
-  // A música é carregada em SEGUNDO PLANO (pode ser grande) — a tela aparece já.
+  function rateOf(t: TrackUI): number {
+    return tune432 && t.detectedTuningHz ? 432 / t.detectedTuningHz : 1;
+  }
+  function playlistForPlayer(): PlaylistTrack[] {
+    return playlist.map((t) => ({ url: t.url, durationSec: t.durationSec, rate: rateOf(t) }));
+  }
+  function musicTotalSec(): number {
+    return playlist.reduce((sum, t) => sum + t.durationSec / rateOf(t), 0);
+  }
 
   root.innerHTML = `
     <section class="rec">
@@ -106,7 +112,6 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
       </div>
 
       <div class="sess-info"></div>
-
       <div id="export-section"></div>
     </section>
   `;
@@ -118,21 +123,14 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
   const elCur = $('#cur');
   const elTot = $('#tot');
 
-  function currentTuningRate(): number {
-    if (project.music?.tuneTo432 && project.music.detectedTuningHz) {
-      return 432 / project.music.detectedTuningHz;
-    }
-    return 1;
-  }
-
   function makePlayer() {
-    player = new SessionPlayer(schedule, clips, musicEl, s);
+    player?.dispose();
+    player = new SessionPlayer(schedule, clips, playlistForPlayer(), s);
     player.setCallbacks((sec) => { if (!seeking) redraw(sec); }, () => { btnPlay.textContent = '▶'; });
-    player.setMusicRate(currentTuningRate());
   }
   makePlayer();
 
-  $('#back').onclick = () => { previewStop?.(); player.dispose(); showRecording(project); };
+  $('#back').onclick = () => { player.dispose(); playlist.forEach((t) => URL.revokeObjectURL(t.url)); showRecording(project); };
 
   // ---- Volumes ----
   const mv = $<HTMLInputElement>('#mv');
@@ -142,38 +140,27 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
   vv.oninput = () => { s.voiceVolume = +vv.value / 100; $('#vv-out').textContent = `${vv.value}%`; player.setVoiceVolume(s.voiceVolume); };
   vv.onchange = () => void saveProject(project);
 
-  // ---- Steppers ----
+  // ---- Steppers + duração ----
   root.querySelectorAll<HTMLElement>('.sess-stepper').forEach((stepper) => {
     const key = stepper.dataset.key!;
     stepper.querySelectorAll('button').forEach((b) => {
       b.onclick = () => {
-        applyStep(key, +(b as HTMLButtonElement).dataset.d!);
-        stepper.querySelector('b')!.textContent = stepperLabel(key);
-        player.reset();
-        schedule = computeSchedule(project, clips);
-        player.updateSchedule(schedule);
-        btnPlay.textContent = '▶';
-        void saveProject(project);
-        redraw(0);
-        renderExportSection();
+        const d = +(b as HTMLButtonElement).dataset.d!;
+        if (key === 'gapBetweenCommandsSec') s.gapBetweenCommandsSec = Math.max(0, s.gapBetweenCommandsSec + d);
+        else if (key === 'gapAfterLastCommandSec') s.gapAfterLastCommandSec = Math.max(0, s.gapAfterLastCommandSec + d);
+        stepper.querySelector('b')!.textContent = key === 'gapBetweenCommandsSec' ? `${s.gapBetweenCommandsSec}s` : `${s.gapAfterLastCommandSec}s`;
+        rebuildSchedule();
       };
     });
   });
-  function stepperLabel(key: string): string {
-    if (key === 'gapBetweenCommandsSec') return `${s.gapBetweenCommandsSec}s`;
-    if (key === 'gapAfterLastCommandSec') return `${s.gapAfterLastCommandSec}s`;
-    return '';
-  }
-  function applyStep(key: string, d: number) {
-    if (key === 'gapBetweenCommandsSec') s.gapBetweenCommandsSec = Math.max(0, s.gapBetweenCommandsSec + d);
-    else if (key === 'gapAfterLastCommandSec') s.gapAfterLastCommandSec = Math.max(0, s.gapAfterLastCommandSec + d);
-  }
-
   const targetIn = $<HTMLInputElement>('#target-min');
   targetIn.onchange = () => {
     const mins = Math.max(1, Math.min(120, Number(targetIn.value) || 1));
     s.targetDurationSec = mins * 60;
     targetIn.value = mins.toFixed(1);
+    rebuildSchedule();
+  };
+  function rebuildSchedule() {
     player.reset();
     schedule = computeSchedule(project, clips);
     player.updateSchedule(schedule);
@@ -181,18 +168,13 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
     void saveProject(project);
     redraw(0);
     renderExportSection();
-  };
+  }
 
-  // ---- Efeitos na voz (empilháveis) ----
+  // ---- Voz: efeitos (empilháveis) ----
   function stackItems(): StackItem[] {
-    return s.voiceStack.map((id) => ({
-      id,
-      intensity: s.voiceIntensities[id] ?? DEFAULT_INTENSITY[id] ?? 0.5,
-    }));
+    return s.voiceStack.map((id) => ({ id, intensity: s.voiceIntensities[id] ?? DEFAULT_INTENSITY[id] ?? 0.5 }));
   }
-  function intensityOf(id: string): number {
-    return s.voiceIntensities[id] ?? DEFAULT_INTENSITY[id] ?? 0.5;
-  }
+  function intensityOf(id: string): number { return s.voiceIntensities[id] ?? DEFAULT_INTENSITY[id] ?? 0.5; }
 
   function renderFxSection() {
     const fx = $('#fx-section');
@@ -205,72 +187,53 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
         ${VOICE_PRESETS.map((p) => {
           const on = s.voiceStack.includes(p.id);
           const order = on ? s.voiceStack.indexOf(p.id) + 1 : 0;
-          return `
-          <button class="fx-card ${on ? 'is-sel' : ''}" data-fx="${p.id}">
+          return `<button class="fx-card ${on ? 'is-sel' : ''}" data-fx="${p.id}">
             ${on ? `<span class="fx-badge">${order}</span>` : ''}
-            <span class="fx-icon">${p.icon}</span>
-            <span class="fx-name">${p.name}</span>
-            <span class="fx-desc">${p.desc}</span>
+            <span class="fx-icon">${p.icon}</span><span class="fx-name">${p.name}</span><span class="fx-desc">${p.desc}</span>
           </button>`;
         }).join('')}
       </div>
-
       <div class="fx-sliders">
         ${s.voiceStack.map((id) => {
           const p = VOICE_PRESETS.find((x) => x.id === id)!;
           const val = Math.round(intensityOf(id) * 100);
-          return `
-          <label class="fx-slider-row">
-            <span>${p.icon} ${p.name} <output>${val}%</output></span>
-            <input type="range" min="0" max="100" value="${val}" data-int="${id}">
-          </label>`;
+          return `<label class="fx-slider-row"><span>${p.icon} ${p.name} <output>${val}%</output></span>
+            <input type="range" min="0" max="100" value="${val}" data-int="${id}"></label>`;
         }).join('') || '<p class="fx-none">Nenhum efeito ativo — voz natural.</p>'}
       </div>
-
       <div class="fx-ab">
         <span>Comparar no trecho atual:</span>
         <button class="btn fx-ab-btn" id="ab-on">▶ Com efeitos</button>
         <button class="btn fx-ab-btn" id="ab-off">▶ Sem efeitos</button>
       </div>
     `;
-
     fx.querySelectorAll<HTMLButtonElement>('[data-fx]').forEach((b) => {
       b.onclick = () => {
         const id = b.dataset.fx!;
-        if (id === 'none') {
-          s.voiceStack = [];
-        } else if (s.voiceStack.includes(id)) {
-          s.voiceStack = s.voiceStack.filter((x) => x !== id);
-        } else {
-          s.voiceStack = [...s.voiceStack, id];
-          if (s.voiceIntensities[id] === undefined) s.voiceIntensities[id] = DEFAULT_INTENSITY[id] ?? 0.5;
-        }
+        if (id === 'none') s.voiceStack = [];
+        else if (s.voiceStack.includes(id)) s.voiceStack = s.voiceStack.filter((x) => x !== id);
+        else { s.voiceStack = [...s.voiceStack, id]; if (s.voiceIntensities[id] === undefined) s.voiceIntensities[id] = DEFAULT_INTENSITY[id] ?? 0.5; }
         player.setVoiceStack(stackItems());
         void saveProject(project);
         renderFxSection();
       };
     });
-
     fx.querySelectorAll<HTMLInputElement>('[data-int]').forEach((sl) => {
       const id = sl.dataset.int!;
-      const out = sl.previousElementSibling?.querySelector('output')
-        ?? sl.parentElement!.querySelector('output');
+      const out = sl.parentElement!.querySelector('output');
       sl.oninput = () => { s.voiceIntensities[id] = +sl.value / 100; if (out) out.textContent = `${sl.value}%`; };
       sl.onchange = () => { player.setVoiceStack(stackItems()); void saveProject(project); };
     });
-
     fx.querySelector<HTMLButtonElement>('#ab-on')!.onclick = () => previewTrecho(true);
     fx.querySelector<HTMLButtonElement>('#ab-off')!.onclick = () => previewTrecho(false);
   }
 
-  // A/B: toca o comando no ponto atual da régua, com ou sem efeito
   let previewStop: (() => void) | null = null;
   function previewTrecho(withEffect: boolean) {
     previewStop?.();
     if (player.isPlaying) { player.pause(); btnPlay.textContent = '▶'; }
     const pos = player.position;
-    const ev = schedule.events.find((e) => e.startSec <= pos && pos < e.startSec + e.durationSec)
-      ?? schedule.events[0];
+    const ev = schedule.events.find((e) => e.startSec <= pos && pos < e.startSec + e.durationSec) ?? schedule.events[0];
     if (!ev) return;
     const clip = clips.get(ev.recordingId);
     if (!clip) return;
@@ -281,261 +244,195 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
       const chain = new VoiceEffectChain(ctx, ctx.destination);
       chain.setStack(stackItems());
       src.connect(chain.input);
-    } else {
-      src.connect(ctx.destination);
-    }
+    } else { src.connect(ctx.destination); }
     src.start();
     src.onended = () => { void ctx.close(); previewStop = null; };
     previewStop = () => { try { src.stop(); } catch { /* noop */ } void ctx.close(); previewStop = null; };
   }
 
-  // ---- Aplicar uma música (de qualquer fonte) ----
-  // Estratégia para arquivos grandes (até centenas de MB): preparar a
-  // reprodução IMEDIATAMENTE (streaming via object URL, sem carregar tudo na
-  // memória) e guardar no banco em SEGUNDO PLANO, com aviso se falhar.
-  async function applyMusic(blob: Blob, name: string, id: string, isBuiltin = false) {
-    player.dispose();
-    musicEl = makeAudio(blob);
-    musicBlob = blob;
-    musicName = name;
-    musicSize = blob.size;
-    musicNote = 'Lendo duração…';
-    renderMusicSection(); // mostra nome + tamanho na hora
-
-    await waitDuration(musicEl);
-    const dur = isFinite(musicEl.duration) ? musicEl.duration : 0;
-    project.music = { id, name, recordingId: id, durationSec: dur, tuneTo432: false };
-    makePlayer();
-    btnPlay.textContent = '▶';
-    musicNote = blob.size > 80e6 ? 'Guardando no navegador… (pode levar alguns segundos)' : '';
-    renderMusicSection();
-    redraw(0);
-
-    // Persiste em segundo plano (não trava a UI nem a reprodução)
-    void persistMusic(id, blob, name, isBuiltin);
+  // ---- Playlist de música ----
+  function probeDuration(url: string): Promise<number> {
+    return new Promise((resolve) => {
+      const a = new Audio(url);
+      a.preload = 'metadata';
+      const done = () => resolve(isFinite(a.duration) ? a.duration : 0);
+      a.addEventListener('loadedmetadata', done, { once: true });
+      a.addEventListener('error', () => resolve(0), { once: true });
+      setTimeout(() => resolve(isFinite(a.duration) ? a.duration : 0), 20000);
+    });
   }
 
-  async function removeMusic() {
-    player.dispose();
-    const id = project.music?.recordingId;
-    if (id) { try { await mediaStore.delete(id); } catch { /* ignore */ } }
+  function persistPlaylist() {
+    project.musicList = playlist.map((t) => ({
+      id: t.id, name: t.name, recordingId: t.id, durationSec: t.durationSec,
+      detectedTuningHz: t.detectedTuningHz, tuneTo432: tune432,
+    }));
     project.music = undefined;
-    musicEl = null;
-    musicBlob = null;
-    musicName = '';
-    musicSize = 0;
-    musicNote = '';
+    void saveProject(project);
+  }
+
+  async function addTrack(blob: Blob, name: string) {
+    const id = uid();
+    const url = URL.createObjectURL(blob);
+    const tr: TrackUI = { id, name, blob, url, durationSec: 0 };
+    playlist.push(tr);
+    renderMusicSection();
+    tr.durationSec = await probeDuration(url);
+    persistPlaylist();
     makePlayer();
-    btnPlay.textContent = '▶';
-    await saveProject(project);
+    renderMusicSection();
+    redraw(0);
+    renderExportSection();
+    void mediaStore.save(id, blob).catch(() => {});
+    void detectTrack(tr);
+  }
+
+  async function detectTrack(tr: TrackUI) {
+    detecting.add(tr.id);
+    renderMusicSection();
+    try {
+      const res = await detectTuning(tr.blob);
+      tr.detectedTuningHz = res.referenceHz;
+      persistPlaylist();
+      if (tune432) makePlayer();
+    } catch { /* ignora */ }
+    detecting.delete(tr.id);
+    renderMusicSection();
+  }
+
+  function removeTrack(id: string) {
+    const i = playlist.findIndex((t) => t.id === id);
+    if (i < 0) return;
+    URL.revokeObjectURL(playlist[i].url);
+    void mediaStore.delete(id);
+    playlist.splice(i, 1);
+    persistPlaylist();
+    makePlayer();
+    renderMusicSection();
+    redraw(0);
+    renderExportSection();
+  }
+
+  function moveTrack(id: string, dir: -1 | 1) {
+    const i = playlist.findIndex((t) => t.id === id);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= playlist.length) return;
+    [playlist[i], playlist[j]] = [playlist[j], playlist[i]];
+    persistPlaylist();
+    makePlayer();
     renderMusicSection();
     redraw(0);
   }
 
-  async function persistMusic(id: string, blob: Blob, name: string, isBuiltin: boolean) {
-    try {
-      if (blob.size > 0) await mediaStore.save(id, blob);
-      if (!isBuiltin) addRecent({ id, name });
-      musicNote = '';
-    } catch (err) {
-      console.error('Falha ao guardar música:', err);
-      musicNote = '⚠ Música grande demais para guardar permanentemente. Ela funciona agora, mas talvez não reabra depois — considere um arquivo menor ou mais curto.';
-    }
-    try { await saveProject(project); } catch { /* ignore */ }
-    renderMusicSection();
-  }
-
-  // ---- Seção de música (reconstruída a cada mudança) ----
   function renderMusicSection() {
     const sec = $('#music-section');
-    const dur = musicEl && isFinite(musicEl.duration) ? musicEl.duration : 0;
-
+    const musTotal = musicTotalSec();
     sec.innerHTML = `
       <div class="music-drop" id="drop">
-        <strong>🎵 Música de fundo</strong>
-        <span>Arraste um arquivo aqui, ou <u>busque no dispositivo / nuvem</u></span>
-        <input type="file" accept="audio/*" hidden id="music-file" />
+        <strong>🎵 Músicas de fundo (playlist)</strong>
+        <span>Arraste arquivos aqui, ou <u>busque no dispositivo / nuvem</u></span>
+        <input type="file" accept="audio/*" multiple hidden id="music-file" />
       </div>
-
       <div class="music-url">
         <input type="url" id="url-in" placeholder="Cole um link (URL) de áudio…" />
         <button class="btn btn-project" id="url-go">Importar</button>
       </div>
 
-      ${getRecents().length ? `
-      <div class="music-lib">
-        <span class="music-lib-title">Recentes</span>
-        <div class="music-chips">
-          ${getRecents().map((r) =>
-            `<button class="music-chip ${project.music?.recordingId === r.id ? 'is-sel' : ''}" data-recent="${r.id}" title="${r.name}">${r.name.length > 22 ? r.name.slice(0, 20) + '…' : r.name}</button>`,
-          ).join('')}
-        </div>
-      </div>` : ''}
-
-      <div class="music-current">
-        ${musicName ? `
-          <div class="music-current-row">
-            <span>🎵 <strong>${musicName}</strong>${dur ? ' · ' + fmt(dur) : ''}${musicSize ? ' · ' + fmtBytes(musicSize) : ''}</span>
-            <button class="btn-link" id="music-remove">✕ Remover</button>
-          </div>
-          ${musicNote ? `<div class="${musicNote.startsWith('⚠') ? 'sess-warn' : 'music-note'}">${musicNote}</div>` : ''}
-          ${!musicNote && dur === 0 ? `<div class="sess-warn">⚠ Formato pode não ser suportado pelo navegador. Tente MP3, M4A, WAV ou OGG.</div>` : ''}
-          ${musicBlob ? `<div class="tuning-box">
-            ${tuningAnalyzing
-              ? `<div class="tuning-analyzing">
-                   <div class="tuning-eq"><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
-                   <span class="tuning-analyzing-label">Analisando afinação…</span>
-                 </div>`
-              : project.music?.detectedTuningHz
-                ? `<div class="music-tuning reveal">${tuningText(project.music.detectedTuningHz)}</div>
-                   <label class="tune432 ${project.music.tuneTo432 ? 'is-on' : ''}">
-                     <input type="checkbox" id="tune432" ${project.music.tuneTo432 ? 'checked' : ''}>
-                     <span class="tune432-track"><span class="tune432-knob"></span></span>
-                     <span class="tune432-label">${project.music.tuneTo432 ? '✓ Tocando em 432 Hz' : 'Afinar para 432 Hz'}</span>
-                   </label>
-                   <button class="btn-link" id="music-redetect">↻ detectar de novo</button>`
-                : `<button class="btn btn-detect" id="music-detect">
-                     <span class="btn-detect-pulse"></span>🔎 Detectar afinação <span class="btn-detect-432">432?</span>
-                   </button>`
-            }
-          </div>` : ''}
-        ` : '<span class="music-none">Nenhuma música escolhida</span>'}
+      ${playlist.length ? `
+      <div class="playlist">
+        ${playlist.map((t, i) => `
+          <div class="pl-row">
+            <span class="pl-idx">${i + 1}</span>
+            <div class="pl-info">
+              <span class="pl-name">${t.name}</span>
+              <span class="pl-meta">${t.durationSec ? fmt(t.durationSec) : '…'}${detecting.has(t.id) ? ' · 🔎 analisando…' : t.detectedTuningHz ? ' · ' + tuningText(t.detectedTuningHz) : ''}</span>
+            </div>
+            <div class="pl-actions">
+              <button class="pl-btn" data-up="${t.id}" ${i === 0 ? 'disabled' : ''}>▲</button>
+              <button class="pl-btn" data-down="${t.id}" ${i === playlist.length - 1 ? 'disabled' : ''}>▼</button>
+              <button class="pl-btn pl-del" data-del="${t.id}">✕</button>
+            </div>
+          </div>`).join('')}
       </div>
+      <label class="tune432 ${tune432 ? 'is-on' : ''}">
+        <input type="checkbox" id="tune432" ${tune432 ? 'checked' : ''}>
+        <span class="tune432-track"><span class="tune432-knob"></span></span>
+        <span class="tune432-label">${tune432 ? '✓ Tudo em 432 Hz' : 'Afinar tudo para 432 Hz'}</span>
+      </label>
+      <p class="music-note">Total de música: ${fmt(musTotal)} ${musTotal < schedule.totalSec ? `(menor que a sessão de ${fmt(schedule.totalSec)} — a playlist repete para preencher; adicione mais músicas para variar até o fim)` : '(cobre a sessão toda com variação)'}</p>
+      ` : '<p class="music-none">Nenhuma música ainda. Adicione uma ou várias para o fundo.</p>'}
     `;
-
-    // Drop zone + clique abre seletor
-    const removeBtn = sec.querySelector<HTMLButtonElement>('#music-remove');
-    if (removeBtn) removeBtn.onclick = removeMusic;
-
-    async function runDetection() {
-      if (!musicBlob || !project.music) return;
-      tuningAnalyzing = true;
-      renderMusicSection();
-      // pequeno atraso para a animação aparecer antes do trabalho pesado
-      await new Promise((r) => setTimeout(r, 350));
-      try {
-        const res = await detectTuning(musicBlob);
-        project.music.detectedTuningHz = res.referenceHz;
-        await saveProject(project);
-        musicNote = res.confidence < 0.25
-          ? '⚠ Análise incerta (música muito complexa/percussiva) — resultado aproximado.'
-          : '';
-      } catch {
-        musicNote = '⚠ Não foi possível analisar esta música.';
-      }
-      tuningAnalyzing = false;
-      renderMusicSection();
-    }
-    const detectBtn = sec.querySelector<HTMLButtonElement>('#music-detect');
-    if (detectBtn) detectBtn.onclick = runDetection;
-    const redetectBtn = sec.querySelector<HTMLButtonElement>('#music-redetect');
-    if (redetectBtn) redetectBtn.onclick = runDetection;
-
-    const tune432 = sec.querySelector<HTMLInputElement>('#tune432');
-    if (tune432) tune432.onchange = () => {
-      if (!project.music) return;
-      project.music.tuneTo432 = tune432.checked;
-      player.setMusicRate(currentTuningRate());
-      void saveProject(project);
-      renderMusicSection();
-    };
 
     const drop = $('#drop');
     const fileInput = $<HTMLInputElement>('#music-file');
     drop.onclick = () => fileInput.click();
     fileInput.onchange = (e) => {
-      const f = (e.target as HTMLInputElement).files?.[0];
-      if (f) void applyMusic(f, f.name, project.music?.recordingId && !project.music.recordingId.startsWith('builtin:') ? project.music.recordingId : uid());
+      const files = (e.target as HTMLInputElement).files;
+      if (files) for (const f of Array.from(files)) void addTrack(f, f.name);
     };
     drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('drag'); });
     drop.addEventListener('dragleave', () => drop.classList.remove('drag'));
     drop.addEventListener('drop', (e) => {
       e.preventDefault(); drop.classList.remove('drag');
-      const f = e.dataTransfer?.files?.[0];
-      if (f && f.type.startsWith('audio')) void applyMusic(f, f.name, uid());
-      else if (f) alert('Esse arquivo não parece ser áudio.');
+      const files = e.dataTransfer?.files;
+      if (files) for (const f of Array.from(files)) if (f.type.startsWith('audio')) void addTrack(f, f.name);
     });
 
-    // URL
     const urlIn = $<HTMLInputElement>('#url-in');
     $('#url-go').onclick = async () => {
       const url = urlIn.value.trim();
       if (!url) return;
-      const current = $('.music-current');
-      current.innerHTML = 'Importando do link…';
+      const btn = $('#url-go'); btn.textContent = 'Importando…';
       try {
         const resp = await fetch(url);
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
         const blob = await resp.blob();
         const name = decodeURIComponent(url.split('/').pop()?.split('?')[0] || 'musica');
-        await applyMusic(blob, name, uid());
+        await addTrack(blob, name);
+        urlIn.value = '';
       } catch {
-        current.innerHTML = '<span class="sess-warn">⚠ Não foi possível baixar desse link (o site pode bloquear download por CORS). Tente baixar o arquivo e importar do dispositivo.</span>';
-      }
+        alert('Não foi possível baixar desse link (o site pode bloquear por CORS). Baixe o arquivo e importe do dispositivo.');
+      } finally { btn.textContent = 'Importar'; }
     };
 
-    // Recentes
-    sec.querySelectorAll<HTMLButtonElement>('[data-recent]').forEach((b) => {
-      b.onclick = async () => {
-        const id = b.dataset.recent!;
-        const blob = await mediaStore.get(id);
-        if (!blob) { alert('Esta música recente não está mais na memória.'); return; }
-        await applyMusic(blob, b.title, id, true); // já está em recents, não readiciona
-      };
-    });
-  }
-
-  // ---- Transporte ----
-  btnPlay.onclick = () => {
-    if (schedule.recorded.length === 0) return;
-    if (player.isPlaying) { player.pause(); btnPlay.textContent = '▶'; }
-    else { player.play(); btnPlay.textContent = '⏸'; }
-  };
-  $('#stop').onclick = () => { player.reset(); btnPlay.textContent = '▶'; redraw(0); };
-
-  // ---- Busca na timeline (durante o arraste move só o marcador; busca ao soltar) ----
-  let seeking = false;
-  let dragPos = 0;
-  const posFromX = (clientX: number) => {
-    const rect = canvas.getBoundingClientRect();
-    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-    return ratio * schedule.totalSec;
-  };
-  canvas.addEventListener('pointerdown', (e) => {
-    if (schedule.recorded.length === 0) return;
-    seeking = true; canvas.setPointerCapture(e.pointerId);
-    dragPos = posFromX(e.clientX); redraw(dragPos);
-  });
-  canvas.addEventListener('pointermove', (e) => {
-    if (!seeking) return;
-    dragPos = posFromX(e.clientX); redraw(dragPos);
-  });
-  canvas.addEventListener('pointerup', () => {
-    if (!seeking) return;
-    seeking = false;
-    player.seek(dragPos);
-    if (!player.isPlaying) { player.play(); btnPlay.textContent = '⏸'; }
-  });
-
-  function redraw(pos: number) {
-    drawTimeline(canvas, schedule, musicName, pos);
-    elCur.textContent = fmt(pos);
-    elTot.textContent = fmt(schedule.totalSec);
-    if (schedule.recorded.length === 0) {
-      info.innerHTML = `<span class="sess-warn">Nenhum comando gravado ainda. Volte e grave para montar a sessão.</span>`;
-    } else {
-      info.innerHTML = `${schedule.recorded.length} comandos · ciclo de ${fmt(schedule.cycleSec)} · <strong>${schedule.cycles} repetições</strong> · total <strong>${fmt(schedule.totalSec)}</strong>`;
-    }
+    sec.querySelectorAll<HTMLButtonElement>('[data-up]').forEach((b) => b.onclick = () => moveTrack(b.dataset.up!, -1));
+    sec.querySelectorAll<HTMLButtonElement>('[data-down]').forEach((b) => b.onclick = () => moveTrack(b.dataset.down!, 1));
+    sec.querySelectorAll<HTMLButtonElement>('[data-del]').forEach((b) => b.onclick = () => removeTrack(b.dataset.del!));
+    const tn = sec.querySelector<HTMLInputElement>('#tune432');
+    if (tn) tn.onchange = () => {
+      tune432 = tn.checked;
+      persistPlaylist();
+      makePlayer();
+      renderMusicSection();
+      redraw(0);
+    };
   }
 
   // ---- Exportação ----
+  async function decodeTrackCapped(t: TrackUI): Promise<AudioBuffer> {
+    const CAP = 720;
+    const sizes: number[] = [];
+    if (isFinite(t.durationSec) && t.durationSec > CAP && t.durationSec > 0) {
+      sizes.push(Math.ceil(t.blob.size * Math.min(1, (CAP + 20) / t.durationSec)), Math.ceil(t.blob.size * Math.min(1, (CAP / 2) / t.durationSec)));
+    } else { sizes.push(t.blob.size, Math.ceil(t.blob.size * 0.5)); }
+    let lastErr: unknown;
+    for (const sz of sizes) {
+      try {
+        const arr = await t.blob.slice(0, sz).arrayBuffer();
+        const dctx = new OfflineAudioContext(2, 1, s.sampleRate);
+        return await dctx.decodeAudioData(arr);
+      } catch (e) { lastErr = e; }
+    }
+    throw lastErr ?? new Error('decode falhou');
+  }
+
   function renderExportSection() {
     const ex = $('#export-section');
     const ready = schedule.recorded.length > 0;
     ex.innerHTML = `
       <div class="export-title2">📤 Exportar sessão</div>
       ${ready ? `
-        <p class="export-sub">Gera um arquivo único com tudo: voz + efeitos + música + 432 + intervalos + loop. Duração: <strong>${fmt(schedule.totalSec)}</strong>.</p>
+        <p class="export-sub">Arquivo único: voz + efeitos + playlist + 432 + intervalos. Duração: <strong>${fmt(schedule.totalSec)}</strong>.</p>
         <div class="export-buttons">
           <button class="btn btn-export" id="exp-mp3">⬇ MP3 320k</button>
           <button class="btn btn-export-2" id="exp-wav">⬇ WAV 24-bit</button>
@@ -552,12 +449,8 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
   }
 
   async function runExport(format: ExportFormat) {
-    if (musicEl && musicEl.duration > 1200) {
-      alert('A trilha de fundo é longa demais para exportar (estoura a memória do navegador). Use uma trilha mais curta — ela fica em loop e preenche a sessão toda igual. (Ou remova a música.)');
-      return;
-    }
     if (format === 'wav' && schedule.totalSec > 1500) {
-      if (!confirm('WAV de sessão longa fica gigante (vários GB) e pode falhar no navegador. Recomendo o MP3. Quer continuar mesmo assim?')) return;
+      if (!confirm('WAV de sessão longa fica gigante (vários GB) e pode falhar. Recomendo o MP3. Continuar mesmo assim?')) return;
     }
     player.pause();
     const fill = $('#exp-fill');
@@ -565,31 +458,79 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
     $('#exp-progress').style.display = 'flex';
     const m3 = $<HTMLButtonElement>('#exp-mp3');
     const wv = $<HTMLButtonElement>('#exp-wav');
+    const active = format === 'mp3' ? m3 : wv;
     m3.disabled = true; wv.disabled = true;
-    status.textContent = musicBlob ? 'Preparando música…' : 'Renderizando…';
+    active.classList.add('exporting');
+    const label = active.textContent;
+    active.textContent = '⏳ Exportando…';
+    status.textContent = 'Renderizando…';
     try {
-      let musicBuffer: AudioBuffer | null = null;
-      if (musicBlob) {
-        const dctx = new OfflineAudioContext(1, 1, s.sampleRate);
-        musicBuffer = await dctx.decodeAudioData(await musicBlob.arrayBuffer());
-      }
+      const tracks = playlist.map((t) => ({ decode: () => decodeTrackCapped(t), durationSec: t.durationSec, rate: rateOf(t) }));
       const blob = await exportSession({
-        project, clips, musicBuffer, musicRate: currentTuningRate(), format,
-        onProgress: (f) => {
-          fill.style.width = `${Math.round(f * 100)}%`;
-          status.textContent = `Renderizando… ${Math.round(f * 100)}%`;
-        },
+        project, clips, tracks, format,
+        onProgress: (f) => { fill.style.width = `${Math.round(f * 100)}%`; status.textContent = `Renderizando… ${Math.round(f * 100)}%`; },
       });
       status.textContent = '✓ Pronto! Baixando…';
       const safe = (getUserName() ? `Reprogramação - ${getUserName()}` : 'Reprogramação').replace(/[\\/:*?"<>|]/g, '');
       downloadBlob(blob, `${safe}.${format}`);
-      setTimeout(() => { $('#exp-progress').style.display = 'none'; fill.style.width = '0%'; }, 2000);
+      setTimeout(() => { $('#exp-progress').style.display = 'none'; fill.style.width = '0%'; }, 2500);
     } catch (err) {
       console.error(err);
-      status.textContent = '⚠ Falha na exportação. Tente uma trilha menor ou uma duração menor.';
+      status.textContent = '⚠ Falha na exportação. Tente uma duração menor ou faixas menores.';
     } finally {
       m3.disabled = false; wv.disabled = false;
+      active.classList.remove('exporting');
+      if (label) active.textContent = label;
     }
+  }
+
+  // ---- Transporte ----
+  btnPlay.onclick = () => {
+    if (schedule.recorded.length === 0) return;
+    if (player.isPlaying) { player.pause(); btnPlay.textContent = '▶'; }
+    else { player.play(); btnPlay.textContent = '⏸'; }
+  };
+  $('#stop').onclick = () => { player.reset(); btnPlay.textContent = '▶'; redraw(0); };
+
+  // ---- Busca na timeline ----
+  let dragPos = 0;
+  const posFromX = (clientX: number) => {
+    const rect = canvas.getBoundingClientRect();
+    return Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)) * schedule.totalSec;
+  };
+  canvas.addEventListener('pointerdown', (e) => {
+    if (schedule.recorded.length === 0) return;
+    seeking = true; canvas.setPointerCapture(e.pointerId); dragPos = posFromX(e.clientX); redraw(dragPos);
+  });
+  canvas.addEventListener('pointermove', (e) => { if (seeking) { dragPos = posFromX(e.clientX); redraw(dragPos); } });
+  canvas.addEventListener('pointerup', () => {
+    if (!seeking) return;
+    seeking = false;
+    player.seek(dragPos);
+    if (!player.isPlaying) { player.play(); btnPlay.textContent = '⏸'; }
+  });
+
+  function musicSegmentsForDraw(): { start: number; end: number; trackIndex: number }[] {
+    const segs: { start: number; end: number; trackIndex: number }[] = [];
+    const total = schedule.totalSec;
+    if (playlist.length === 0 || total <= 0) return segs;
+    let t = 0, i = 0, guard = 0;
+    while (t < total && guard < 100000) {
+      const tr = playlist[i % playlist.length];
+      const len = tr.durationSec / rateOf(tr);
+      if (!isFinite(len) || len <= 0) break;
+      segs.push({ start: t, end: t + len, trackIndex: i % playlist.length });
+      t += len; i++; guard++;
+    }
+    return segs;
+  }
+
+  function redraw(pos: number) {
+    drawTimeline(canvas, schedule, musicSegmentsForDraw(), playlist.map((t) => t.name), pos);
+    elCur.textContent = fmt(pos);
+    elTot.textContent = fmt(schedule.totalSec);
+    if (schedule.recorded.length === 0) info.innerHTML = `<span class="sess-warn">Nenhum comando gravado ainda. Volte e grave.</span>`;
+    else info.innerHTML = `${schedule.recorded.length} comandos · ciclo de ${fmt(schedule.cycleSec)} · <strong>${schedule.cycles} repetições</strong> · total <strong>${fmt(schedule.totalSec)}</strong>`;
   }
 
   renderFxSection();
@@ -597,47 +538,28 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
   renderExportSection();
   redraw(0);
 
-  // Carrega a música existente em segundo plano (não bloqueia a tela)
-  void loadMusicFromStorage();
-
-  async function loadMusicFromStorage() {
-    const id = project.music?.recordingId;
-    if (!id) return;
-    let blob: Blob | undefined;
-    try { blob = await mediaStore.get(id); } catch { /* ignore */ }
-    if (!blob || blob.size === 0) {
-      musicNote = '⚠ A música não está no armazenamento (a importação anterior não foi salva). Importe o arquivo novamente.';
-      renderMusicSection();
-      return;
+  // Carrega a playlist salva (em segundo plano)
+  void (async () => {
+    for (const mt of project.musicList ?? []) {
+      const blob = await mediaStore.get(mt.recordingId);
+      if (blob && blob.size > 0) {
+        playlist.push({ id: mt.recordingId, name: mt.name, blob, url: URL.createObjectURL(blob), durationSec: mt.durationSec, detectedTuningHz: mt.detectedTuningHz });
+      }
     }
-    musicEl = makeAudio(blob);
-    musicBlob = blob;
-    musicName = project.music?.name ?? '';
-    musicSize = blob.size;
-    renderMusicSection();
-    await waitDuration(musicEl);
-    musicNote = '';
     makePlayer();
     renderMusicSection();
     redraw(0);
-  }
+    renderExportSection();
+  })();
 }
 
-function makeAudio(blob: Blob): HTMLAudioElement {
-  const el = new Audio(URL.createObjectURL(blob));
-  el.preload = 'metadata';
-  return el;
-}
-function waitDuration(el: HTMLAudioElement): Promise<void> {
-  return new Promise((resolve) => {
-    if (el.readyState >= 1 && isFinite(el.duration)) return resolve();
-    el.addEventListener('loadedmetadata', () => resolve(), { once: true });
-    el.addEventListener('error', () => resolve(), { once: true });
-    setTimeout(resolve, 20000);
-  });
-}
-
-function drawTimeline(canvas: HTMLCanvasElement, schedule: SessionSchedule, musicName: string, playSec: number) {
+function drawTimeline(
+  canvas: HTMLCanvasElement,
+  schedule: SessionSchedule,
+  musicSegs: { start: number; end: number; trackIndex: number }[],
+  names: string[],
+  playSec: number,
+) {
   const ctx = canvas.getContext('2d')!;
   const w = canvas.width, h = canvas.height;
   ctx.clearRect(0, 0, w, h);
@@ -655,31 +577,35 @@ function drawTimeline(canvas: HTMLCanvasElement, schedule: SessionSchedule, musi
     ctx.fillText(`${Math.round(t / 60)}m`, x + 2, 12);
   }
 
-  const voiceY = 28, voiceH = 40;
+  // voz
+  const vy = 28, vh = 40;
   ctx.fillStyle = 'rgba(108,140,255,0.12)';
-  ctx.fillRect(0, voiceY, w, voiceH);
-  const palette = ['#6c8cff', '#7a9cff', '#5b7cff'];
+  ctx.fillRect(0, vy, w, vh);
+  const vpal = ['#6c8cff', '#7a9cff', '#5b7cff'];
   schedule.events.forEach((ev) => {
-    const x = ev.startSec * pxPerSec;
-    const bw = Math.max(1, ev.durationSec * pxPerSec);
-    ctx.fillStyle = palette[ev.commandIndex % palette.length];
-    ctx.fillRect(x, voiceY + 4, bw, voiceH - 8);
+    ctx.fillStyle = vpal[ev.commandIndex % vpal.length];
+    ctx.fillRect(ev.startSec * pxPerSec, vy + 4, Math.max(1, ev.durationSec * pxPerSec), vh - 8);
   });
   ctx.fillStyle = 'rgba(232,234,240,0.7)';
-  ctx.fillText('🎙️ Voz (comandos em loop)', 4, voiceY - 4);
+  ctx.fillText('🎙️ Voz (comandos em loop)', 4, vy - 4);
 
-  const musicY = 90, musicH = 40;
-  ctx.fillStyle = musicName ? 'rgba(79,208,122,0.18)' : 'rgba(154,163,178,0.08)';
-  ctx.fillRect(0, musicY, w, musicH);
-  if (musicName) {
-    ctx.fillStyle = 'rgba(79,208,122,0.5)';
-    ctx.fillRect(0, musicY + 4, w, musicH - 8);
-  }
+  // música (segmentos)
+  const my = 90, mh = 40;
+  ctx.fillStyle = musicSegs.length ? 'rgba(79,208,122,0.12)' : 'rgba(154,163,178,0.08)';
+  ctx.fillRect(0, my, w, mh);
+  const mpal = ['rgba(79,208,122,0.55)', 'rgba(120,200,140,0.55)', 'rgba(90,180,170,0.55)', 'rgba(150,200,110,0.55)'];
+  musicSegs.forEach((sg) => {
+    const x = sg.start * pxPerSec;
+    const bw = Math.max(1, (sg.end - sg.start) * pxPerSec);
+    ctx.fillStyle = mpal[sg.trackIndex % mpal.length];
+    ctx.fillRect(x, my + 4, bw, mh - 8);
+    ctx.strokeStyle = 'rgba(14,16,20,0.6)';
+    ctx.beginPath(); ctx.moveTo(x, my + 4); ctx.lineTo(x, my + mh - 4); ctx.stroke();
+  });
   ctx.fillStyle = 'rgba(232,234,240,0.7)';
-  ctx.fillText(musicName ? `🎵 ${musicName} (loop)` : '🎵 Sem música', 4, musicY - 4);
+  ctx.fillText(musicSegs.length ? `🎵 Playlist (${names.length} música${names.length > 1 ? 's' : ''}, em sequência)` : '🎵 Sem música', 4, my - 4);
 
   const x = playSec * pxPerSec;
-  ctx.strokeStyle = '#fff';
-  ctx.lineWidth = 2;
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
   ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
 }
