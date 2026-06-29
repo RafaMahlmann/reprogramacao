@@ -20,10 +20,22 @@ export function renderRecordingScreen(root: HTMLElement, project: Project): void
   let stopPlayback: (() => void) | null = null;
   let micReady = false;
 
+  const COMMAND_LABELS = [
+    'Estado Delta — acalmar a mente',
+    'Libertação de traumas e bloqueios',
+    'Autocura e equilíbrio',
+    'Conhecimento interior e memória',
+    'Ativação de funções superiores',
+    'Sintonização com frequências elevadas',
+    'Fechamento — conclusão de todos os comandos',
+  ];
+
   root.innerHTML = `
     <section class="rec">
       <div class="rec-progress"></div>
-      <textarea class="rec-text" rows="3" spellcheck="false"></textarea>
+      <div class="rec-label"></div>
+      <div class="rec-name-hint">Substitua <strong>(seu nome)</strong> pelo seu nome antes de gravar.</div>
+      <textarea class="rec-text" rows="5" spellcheck="false"></textarea>
       <div class="rec-prompter" aria-live="polite"></div>
       <div class="rec-status"></div>
       <div class="rec-controls"></div>
@@ -31,6 +43,7 @@ export function renderRecordingScreen(root: HTMLElement, project: Project): void
   `;
 
   const elProgress = root.querySelector<HTMLElement>('.rec-progress')!;
+  const elLabel = root.querySelector<HTMLElement>('.rec-label')!;
   const elText = root.querySelector<HTMLTextAreaElement>('.rec-text')!;
   const elPrompter = root.querySelector<HTMLElement>('.rec-prompter')!;
   const elStatus = root.querySelector<HTMLElement>('.rec-status')!;
@@ -43,6 +56,7 @@ export function renderRecordingScreen(root: HTMLElement, project: Project): void
   function render() {
     const cmd = current();
     elProgress.textContent = `Comando ${index + 1} de ${project.commands.length}`;
+    elLabel.textContent = COMMAND_LABELS[index] ?? '';
     elText.value = cmd.text;
     elPrompter.textContent = '';
     const hasRec = !!cmd.recordingId && clips.has(cmd.recordingId);

@@ -9,7 +9,7 @@ import type { Project } from '../core/types';
 import { renderRecordingScreen } from './screens/recording-screen';
 
 export function startApp(root: HTMLElement): void {
-  const project: Project = createProject('Reprogramação');
+  const project: Project = createProject('Reprogramação Neural');
   root.innerHTML = `
     <header class="app-header">
       <h1>Reprogramação</h1>
