@@ -50,7 +50,6 @@ export function renderRecordingScreen(root: HTMLElement, project: Project): void
   let stopPlayback: (() => void) | null = null;
   let stopWaveform: (() => void) | null = null;
   let micReady = false;
-  let isPlaying = false;
 
   // Mostra loading enquanto carrega do IndexedDB
   root.innerHTML = `<div class="rec-loading">Carregando gravações salvas…</div>`;
@@ -324,12 +323,10 @@ export function renderRecordingScreen(root: HTMLElement, project: Project): void
     const clip = clips.get(cmd.recordingId ?? '');
     if (!clip) return;
     stopPlayback?.();
-    isPlaying = true;
     showPlayAnim(true);
     el('.rec-status').textContent = '▶ Reproduzindo…';
     renderControls(true);
     stopPlayback = playClip(clip, () => {
-      isPlaying = false;
       showPlayAnim(false);
       el('.rec-status').textContent = `✓ Gravado (${cmd.durationSec?.toFixed(1)}s)`;
       renderControls(true);
@@ -337,7 +334,7 @@ export function renderRecordingScreen(root: HTMLElement, project: Project): void
   }
 
   function deleteCurrent() {
-    stopPlayback?.(); isPlaying = false;
+    stopPlayback?.();
     const cmd = current();
     if (cmd.recordingId) {
       clips.delete(cmd.recordingId);
@@ -356,7 +353,7 @@ export function renderRecordingScreen(root: HTMLElement, project: Project): void
   }
 
   function go(newIndex: number) {
-    stopPlayback?.(); isPlaying = false;
+    stopPlayback?.();
     index = newIndex;
     render();
   }
