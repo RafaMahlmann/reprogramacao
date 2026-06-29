@@ -56,6 +56,7 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
   let musicName = project.music?.name ?? '';
   let musicSize = 0;
   let musicNote = project.music?.recordingId ? 'Carregando música…' : '';
+  let tuningAnalyzing = false;
   let schedule: SessionSchedule = computeSchedule(project, clips);
   let player: SessionPlayer;
 
@@ -366,8 +367,20 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
           </div>
           ${musicNote ? `<div class="${musicNote.startsWith('⚠') ? 'sess-warn' : 'music-note'}">${musicNote}</div>` : ''}
           ${!musicNote && dur === 0 ? `<div class="sess-warn">⚠ Formato pode não ser suportado pelo navegador. Tente MP3, M4A, WAV ou OGG.</div>` : ''}
-          ${musicBlob ? `<button class="btn fx-ab-btn" id="music-detect">🔎 Detectar afinação (432?)</button>` : ''}
-          ${project.music?.detectedTuningHz ? `<div class="music-tuning">${tuningText(project.music.detectedTuningHz)}</div>` : ''}
+          ${musicBlob ? `<div class="tuning-box">
+            ${tuningAnalyzing
+              ? `<div class="tuning-analyzing">
+                   <div class="tuning-eq"><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
+                   <span class="tuning-analyzing-label">Analisando afinação…</span>
+                 </div>`
+              : project.music?.detectedTuningHz
+                ? `<div class="music-tuning reveal">${tuningText(project.music.detectedTuningHz)}</div>
+                   <button class="btn-link" id="music-redetect">↻ detectar de novo</button>`
+                : `<button class="btn btn-detect" id="music-detect">
+                     <span class="btn-detect-pulse"></span>🔎 Detectar afinação <span class="btn-detect-432">432?</span>
+                   </button>`
+            }
+          </div>` : ''}
         ` : '<span class="music-none">Nenhuma música escolhida</span>'}
       </div>
     `;
@@ -376,11 +389,12 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
     const removeBtn = sec.querySelector<HTMLButtonElement>('#music-remove');
     if (removeBtn) removeBtn.onclick = removeMusic;
 
-    const detectBtn = sec.querySelector<HTMLButtonElement>('#music-detect');
-    if (detectBtn) detectBtn.onclick = async () => {
+    async function runDetection() {
       if (!musicBlob || !project.music) return;
-      detectBtn.textContent = 'Analisando afinação…';
-      detectBtn.disabled = true;
+      tuningAnalyzing = true;
+      renderMusicSection();
+      // pequeno atraso para a animação aparecer antes do trabalho pesado
+      await new Promise((r) => setTimeout(r, 350));
       try {
         const res = await detectTuning(musicBlob);
         project.music.detectedTuningHz = res.referenceHz;
@@ -388,14 +402,16 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
         musicNote = res.confidence < 0.25
           ? '⚠ Análise incerta (música muito complexa/percussiva) — resultado aproximado.'
           : '';
-        renderMusicSection();
       } catch {
-        detectBtn.textContent = '🔎 Detectar afinação (432?)';
-        detectBtn.disabled = false;
         musicNote = '⚠ Não foi possível analisar esta música.';
-        renderMusicSection();
       }
-    };
+      tuningAnalyzing = false;
+      renderMusicSection();
+    }
+    const detectBtn = sec.querySelector<HTMLButtonElement>('#music-detect');
+    if (detectBtn) detectBtn.onclick = runDetection;
+    const redetectBtn = sec.querySelector<HTMLButtonElement>('#music-redetect');
+    if (redetectBtn) redetectBtn.onclick = runDetection;
 
     const drop = $('#drop');
     const fileInput = $<HTMLInputElement>('#music-file');
