@@ -13,8 +13,9 @@ import type { TeleprompterHandle } from '../../modules/teleprompter/teleprompter
 import { saveProject } from '../../modules/project/project-service';
 import { clipStore } from '../../modules/storage/db';
 import { uid } from '../../core/id';
-import { getUserName, showNameCard } from '../app';
-import { downloadClipsSequential } from '../../modules/export/download';
+import { getUserName, setUserName, showNameCard } from '../app';
+import { downloadClipsSequential, downloadBlob } from '../../modules/export/download';
+import { buildProjectFile, importProjectFile } from '../../modules/project/project-file';
 
 const COMMAND_LABELS = [
   'Estado Delta — acalmar a mente',
@@ -108,8 +109,18 @@ export function renderRecordingScreen(root: HTMLElement, project: Project): void
 
         <div class="rec-controls"></div>
         <div class="rec-export" style="display:none"></div>
+
+        <div class="rec-project-actions">
+          <button class="btn btn-project" id="btn-save-project">💾 Salvar projeto (.rpn)</button>
+          <label class="btn btn-project" for="open-file">📂 Abrir projeto (.rpn)</label>
+          <input type="file" accept=".rpn,application/octet-stream" hidden id="open-file" />
+        </div>
+        <p class="rec-project-hint">O arquivo .rpn guarda todos os áudios + textos num só arquivo, para você baixar no PC e reabrir depois.</p>
       </section>
     `;
+
+    root.querySelector<HTMLButtonElement>('#btn-save-project')!.onclick = saveProjectFile;
+    root.querySelector<HTMLInputElement>('#open-file')!.onchange = openProjectFile;
 
     root.querySelector<HTMLButtonElement>('#btn-change-name')!.onclick = () =>
       showNameCard(root, () => renderRecordingScreen(root, project));
@@ -356,5 +367,34 @@ export function renderRecordingScreen(root: HTMLElement, project: Project): void
     stopPlayback?.();
     index = newIndex;
     render();
+  }
+
+  // ---- Projeto .rpn ----
+  async function saveProjectFile() {
+    const name = getUserName();
+    const blob = await buildProjectFile(project, clips, name);
+    const safe = (name ? `Reprogramação - ${name}` : 'Reprogramação').replace(/[\\/:*?"<>|]/g, '');
+    downloadBlob(blob, `${safe}.rpn`);
+  }
+
+  async function openProjectFile(e: Event) {
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+    try {
+      el('.rec-status').textContent = 'Abrindo projeto…';
+      const imported = await importProjectFile(file);
+      // Persiste clips e projeto no IndexedDB
+      for (const [id, clip] of imported.clips) await clipStore.save(id, clip);
+      if (imported.userName) setUserName(imported.userName);
+      await saveProject(imported.project);
+      // Re-renderiza com o projeto importado
+      renderRecordingScreen(root, imported.project);
+    } catch (err) {
+      el('.rec-status').textContent = '⚠ Não foi possível abrir este arquivo .rpn.';
+      console.error(err);
+    } finally {
+      input.value = '';
+    }
   }
 }

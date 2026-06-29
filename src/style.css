@@ -464,3 +464,29 @@ body {
   border-radius: 10px;
   margin-top: 0.25rem;
 }
+
+/* ---------- Ações de projeto (.rpn) ---------- */
+.rec-project-actions {
+  display: flex;
+  gap: 0.6rem;
+  margin-top: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.btn-project {
+  flex: 1;
+  min-width: 160px;
+  text-align: center;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid #2c313d;
+  padding: 0.7rem 1rem;
+  font-size: 0.9rem;
+}
+
+.rec-project-hint {
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin: 0.5rem 0 0;
+  line-height: 1.5;
+}

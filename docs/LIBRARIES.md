@@ -15,6 +15,7 @@ vulnerabilidades conhecidas · compatibilidade com a arquitetura.
 | `vite` | Build / dev server | MIT | Padrão de mercado, enorme adoção | Mantido pela equipe Vite/Vue, milhões de downloads/semana |
 | `typescript` | Tipagem | Apache-2.0 | Segurança de tipos, refatoração segura | Microsoft |
 | `vite-plugin-pwa` | Service worker + manifest (PWA) | MIT | Abstrai Workbox; padrão da comunidade Vite | Autor antfu (core Vite/Vue) |
+| `fflate` | ZIP do formato de projeto .rpn | MIT | Minúscula (~8 kB), sem dependências, auditada, altíssima adoção | Autor 101arrowz; amplamente usada em browsers |
 
 Tudo nativo do navegador para áudio nesta fase: **Web Audio API**, **AudioWorklet**,
 **MediaDevices/getUserMedia**, **IndexedDB**. Sem dependência externa de áudio até aqui —
