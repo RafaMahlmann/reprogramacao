@@ -76,7 +76,14 @@ export async function loadMostRecentProject(): Promise<Project | undefined> {
 
 /** Garante que projetos antigos tenham todos os campos de configuração atuais. */
 export function normalizeProject(project: Project): Project {
+  const old = project.settings as Partial<typeof DEFAULT_SETTINGS> & { voicePreset?: string };
   project.settings = { ...DEFAULT_SETTINGS, ...project.settings };
+  // Migra o modelo antigo (preset único) para a pilha de efeitos
+  if (!Array.isArray(project.settings.voiceStack)) project.settings.voiceStack = [];
+  if (old.voicePreset && old.voicePreset !== 'none' && project.settings.voiceStack.length === 0) {
+    project.settings.voiceStack = [old.voicePreset];
+  }
+  if (!project.settings.voiceIntensities) project.settings.voiceIntensities = {};
   return project;
 }
 

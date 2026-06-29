@@ -14,7 +14,7 @@ import { saveProject } from '../../modules/project/project-service';
 import { computeSchedule, SessionPlayer, type SessionSchedule } from '../../modules/audio/session-engine';
 import { BUILTIN_TRACKS, renderBuiltinTrack } from '../../modules/audio/builtin-tracks';
 import { getRecents, addRecent } from '../../modules/audio/music-recents';
-import { VOICE_PRESETS, VoiceEffectChain } from '../../modules/audio/voice-effects';
+import { VOICE_PRESETS, VoiceEffectChain, DEFAULT_INTENSITY, type StackItem } from '../../modules/audio/voice-effects';
 import { bufferFromClip } from '../../modules/audio/playback';
 import { showRecording } from '../app';
 import { uid } from '../../core/id';
@@ -150,48 +150,81 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
     else if (key === 'targetDurationMin') s.targetDurationSec = Math.max(60, s.targetDurationSec + d * 60);
   }
 
-  // ---- Efeitos na voz ----
+  // ---- Efeitos na voz (empilháveis) ----
+  function stackItems(): StackItem[] {
+    return s.voiceStack.map((id) => ({
+      id,
+      intensity: s.voiceIntensities[id] ?? DEFAULT_INTENSITY[id] ?? 0.5,
+    }));
+  }
+  function intensityOf(id: string): number {
+    return s.voiceIntensities[id] ?? DEFAULT_INTENSITY[id] ?? 0.5;
+  }
+
   function renderFxSection() {
     const fx = $('#fx-section');
     fx.innerHTML = `
-      <div class="fx-title">🎛️ Efeitos na voz</div>
+      <div class="fx-title">🎛️ Efeitos na voz <span class="fx-hint">(toque para somar; toque de novo para tirar)</span></div>
       <div class="fx-cards">
-        ${VOICE_PRESETS.map((p) => `
-          <button class="fx-card ${s.voicePreset === p.id ? 'is-sel' : ''}" data-fx="${p.id}">
+        <button class="fx-card ${s.voiceStack.length === 0 ? 'is-sel' : ''}" data-fx="none">
+          <span class="fx-icon">🎙️</span><span class="fx-name">Natural</span><span class="fx-desc">Sem efeito</span>
+        </button>
+        ${VOICE_PRESETS.map((p) => {
+          const on = s.voiceStack.includes(p.id);
+          const order = on ? s.voiceStack.indexOf(p.id) + 1 : 0;
+          return `
+          <button class="fx-card ${on ? 'is-sel' : ''}" data-fx="${p.id}">
+            ${on ? `<span class="fx-badge">${order}</span>` : ''}
             <span class="fx-icon">${p.icon}</span>
             <span class="fx-name">${p.name}</span>
             <span class="fx-desc">${p.desc}</span>
-          </button>`).join('')}
+          </button>`;
+        }).join('')}
       </div>
-      <label class="fx-intensity ${s.voicePreset === 'none' ? 'is-off' : ''}">
-        Intensidade <output id="fi-out">${Math.round(s.voiceEffectIntensity * 100)}%</output>
-        <input type="range" id="fi" min="0" max="100" value="${Math.round(s.voiceEffectIntensity * 100)}">
-      </label>
+
+      <div class="fx-sliders">
+        ${s.voiceStack.map((id) => {
+          const p = VOICE_PRESETS.find((x) => x.id === id)!;
+          const val = Math.round(intensityOf(id) * 100);
+          return `
+          <label class="fx-slider-row">
+            <span>${p.icon} ${p.name} <output>${val}%</output></span>
+            <input type="range" min="0" max="100" value="${val}" data-int="${id}">
+          </label>`;
+        }).join('') || '<p class="fx-none">Nenhum efeito ativo — voz natural.</p>'}
+      </div>
+
       <div class="fx-ab">
         <span>Comparar no trecho atual:</span>
-        <button class="btn fx-ab-btn" id="ab-on">▶ Com efeito</button>
-        <button class="btn fx-ab-btn" id="ab-off">▶ Sem efeito</button>
+        <button class="btn fx-ab-btn" id="ab-on">▶ Com efeitos</button>
+        <button class="btn fx-ab-btn" id="ab-off">▶ Sem efeitos</button>
       </div>
     `;
 
     fx.querySelectorAll<HTMLButtonElement>('[data-fx]').forEach((b) => {
       b.onclick = () => {
-        s.voicePreset = b.dataset.fx!;
-        player.setVoicePreset(s.voicePreset, s.voiceEffectIntensity);
+        const id = b.dataset.fx!;
+        if (id === 'none') {
+          s.voiceStack = [];
+        } else if (s.voiceStack.includes(id)) {
+          s.voiceStack = s.voiceStack.filter((x) => x !== id);
+        } else {
+          s.voiceStack = [...s.voiceStack, id];
+          if (s.voiceIntensities[id] === undefined) s.voiceIntensities[id] = DEFAULT_INTENSITY[id] ?? 0.5;
+        }
+        player.setVoiceStack(stackItems());
         void saveProject(project);
         renderFxSection();
       };
     });
 
-    const fi = fx.querySelector<HTMLInputElement>('#fi')!;
-    fi.oninput = () => {
-      s.voiceEffectIntensity = +fi.value / 100;
-      fx.querySelector('#fi-out')!.textContent = `${fi.value}%`;
-    };
-    fi.onchange = () => {
-      player.setVoiceIntensity(s.voiceEffectIntensity);
-      void saveProject(project);
-    };
+    fx.querySelectorAll<HTMLInputElement>('[data-int]').forEach((sl) => {
+      const id = sl.dataset.int!;
+      const out = sl.previousElementSibling?.querySelector('output')
+        ?? sl.parentElement!.querySelector('output');
+      sl.oninput = () => { s.voiceIntensities[id] = +sl.value / 100; if (out) out.textContent = `${sl.value}%`; };
+      sl.onchange = () => { player.setVoiceStack(stackItems()); void saveProject(project); };
+    });
 
     fx.querySelector<HTMLButtonElement>('#ab-on')!.onclick = () => previewTrecho(true);
     fx.querySelector<HTMLButtonElement>('#ab-off')!.onclick = () => previewTrecho(false);
@@ -211,9 +244,9 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
     const ctx = new AudioContext();
     const src = ctx.createBufferSource();
     src.buffer = bufferFromClip(ctx, clip);
-    if (withEffect && s.voicePreset !== 'none') {
+    if (withEffect && s.voiceStack.length > 0) {
       const chain = new VoiceEffectChain(ctx, ctx.destination);
-      chain.set(s.voicePreset, s.voiceEffectIntensity);
+      chain.setStack(stackItems());
       src.connect(chain.input);
     } else {
       src.connect(ctx.destination);

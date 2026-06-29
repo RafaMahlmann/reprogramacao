@@ -14,15 +14,25 @@ export interface VoicePreset {
   desc: string;
 }
 
+/** Efeitos combináveis (podem ser empilhados). 'none' não entra na lista. */
 export const VOICE_PRESETS: VoicePreset[] = [
-  { id: 'none', name: 'Natural', icon: '🎙️', desc: 'Sem efeito' },
   { id: 'clean', name: 'Voz limpa', icon: '✨', desc: 'Tira pop e uniformiza' },
   { id: 'warm', name: 'Voz quente', icon: '🔥', desc: 'Grave macio, encorpada' },
   { id: 'room', name: 'Sala ampla', icon: '🏠', desc: 'Reverb sutil' },
   { id: 'cave', name: 'Cavernoso', icon: '🏛️', desc: 'Reverb grande' },
   { id: 'echo', name: 'Eco suave', icon: '🌫️', desc: 'Delay leve' },
-  { id: 'mic_clean', name: 'Limpeza de microfone', icon: '🧹', desc: 'High-pass forte + de-esser' },
+  { id: 'mic_clean', name: 'Limpeza de microfone', icon: '🧹', desc: 'High-pass + de-esser' },
 ];
+
+/** Intensidade padrão ao ativar cada efeito (0..1). */
+export const DEFAULT_INTENSITY: Record<string, number> = {
+  clean: 0.5,
+  warm: 0.5,
+  room: 0.4,
+  cave: 0.5,
+  echo: 0.04, // baixo de propósito — em alto distorce
+  mic_clean: 0.6,
+};
 
 /** Gera um impulse-response sintético (ruído com decaimento exponencial). */
 function makeImpulseResponse(ctx: BaseAudioContext, seconds: number, decay: number): AudioBuffer {
@@ -115,14 +125,34 @@ export function buildChain(ctx: BaseAudioContext, presetId: string, intensity: n
   return { input, output };
 }
 
-/** Cadeia de efeitos viva, reconfigurável, na trilha de voz. */
+export interface StackItem { id: string; intensity: number; }
+
+/** Encadeia vários efeitos em série. Pilha vazia = passa direto. */
+export function buildStack(ctx: BaseAudioContext, stack: StackItem[]): BuiltChain {
+  const input = ctx.createGain();
+  if (stack.length === 0) {
+    const output = ctx.createGain();
+    input.connect(output);
+    return { input, output };
+  }
+  let prev: AudioNode = input;
+  let lastOut: AudioNode = input;
+  for (const item of stack) {
+    const chain = buildChain(ctx, item.id, item.intensity);
+    prev.connect(chain.input);
+    prev = chain.output;
+    lastOut = chain.output;
+  }
+  return { input, output: lastOut };
+}
+
+/** Cadeia de efeitos viva, reconfigurável (pilha), na trilha de voz. */
 export class VoiceEffectChain {
   readonly input: GainNode;
   private readonly ctx: BaseAudioContext;
   private readonly destination: AudioNode;
   private inner: BuiltChain | null = null;
-  private presetId = 'none';
-  private intensity = 0.5;
+  private stack: StackItem[] = [];
 
   constructor(ctx: BaseAudioContext, destination: AudioNode) {
     this.ctx = ctx;
@@ -131,18 +161,15 @@ export class VoiceEffectChain {
     this.rebuild();
   }
 
-  set(presetId: string, intensity: number) {
-    this.presetId = presetId;
-    this.intensity = intensity;
+  setStack(stack: StackItem[]) {
+    this.stack = stack;
     this.rebuild();
   }
-
-  setIntensity(i: number) { this.intensity = i; this.rebuild(); }
 
   private rebuild() {
     this.input.disconnect();
     if (this.inner) { try { this.inner.output.disconnect(); } catch { /* noop */ } }
-    this.inner = buildChain(this.ctx, this.presetId, this.intensity);
+    this.inner = buildStack(this.ctx, this.stack);
     this.input.connect(this.inner.input);
     this.inner.output.connect(this.destination);
   }

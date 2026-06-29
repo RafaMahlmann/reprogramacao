@@ -12,7 +12,7 @@
  *    (relógio do AudioContext — nada de setTimeout para o áudio em si).
  */
 import type { AudioClip, Project } from '../../core/types';
-import { VoiceEffectChain } from './voice-effects';
+import { VoiceEffectChain, DEFAULT_INTENSITY, type StackItem } from './voice-effects';
 import { bufferFromClip } from './playback';
 
 export interface SessionEvent {
@@ -130,8 +130,7 @@ export class SessionPlayer {
 
   setMusicVolume(v: number) { if (this.musicGain) this.musicGain.gain.value = v; }
   setVoiceVolume(v: number) { if (this.voiceGain) this.voiceGain.gain.value = v; }
-  setVoicePreset(id: string, intensity: number) { this.voiceFx?.set(id, intensity); }
-  setVoiceIntensity(i: number) { this.voiceFx?.setIntensity(i); }
+  setVoiceStack(stack: StackItem[]) { this.voiceFx?.setStack(stack); }
 
   private ensureGraph() {
     if (this.ctx) return;
@@ -141,7 +140,7 @@ export class SessionPlayer {
     this.voiceGain.gain.value = this.settings.voiceVolume;
     // Voz → volume → cadeia de efeitos → saída
     this.voiceFx = new VoiceEffectChain(ctx, ctx.destination);
-    this.voiceFx.set(this.settings.voicePreset, this.settings.voiceEffectIntensity);
+    this.voiceFx.setStack(this.stackFromSettings());
     this.voiceGain.connect(this.voiceFx.input);
 
     if (this.musicEl) {
@@ -151,6 +150,13 @@ export class SessionPlayer {
       this.musicGain.gain.value = this.settings.musicVolume;
       this.musicSource.connect(this.musicGain).connect(ctx.destination);
     }
+  }
+
+  private stackFromSettings(): StackItem[] {
+    return this.settings.voiceStack.map((id) => ({
+      id,
+      intensity: this.settings.voiceIntensities[id] ?? DEFAULT_INTENSITY[id] ?? 0.5,
+    }));
   }
 
   private elapsed(): number {
