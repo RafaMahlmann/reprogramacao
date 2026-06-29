@@ -586,6 +586,8 @@ body {
 .music-current strong { color: var(--text); }
 .music-none { color: var(--muted); }
 .music-note { color: var(--muted); font-size: 0.8rem; margin-top: 0.25rem; }
+.music-current-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
+.music-current-row .btn-link { flex: 0 0 auto; color: var(--rec); }
 
 .sess-controls {
   display: grid;

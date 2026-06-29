@@ -279,6 +279,22 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
     void persistMusic(id, blob, name, isBuiltin);
   }
 
+  async function removeMusic() {
+    player.dispose();
+    const id = project.music?.recordingId;
+    if (id) { try { await mediaStore.delete(id); } catch { /* ignore */ } }
+    project.music = undefined;
+    musicEl = null;
+    musicName = '';
+    musicSize = 0;
+    musicNote = '';
+    makePlayer();
+    btnPlay.textContent = '▶';
+    await saveProject(project);
+    renderMusicSection();
+    redraw(0);
+  }
+
   async function persistMusic(id: string, blob: Blob, name: string, isBuiltin: boolean) {
     try {
       if (blob.size > 0) await mediaStore.save(id, blob);
@@ -330,7 +346,10 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
 
       <div class="music-current">
         ${musicName ? `
-          🎵 <strong>${musicName}</strong>${dur ? ' · ' + fmt(dur) : ''}${musicSize ? ' · ' + fmtBytes(musicSize) : ''}
+          <div class="music-current-row">
+            <span>🎵 <strong>${musicName}</strong>${dur ? ' · ' + fmt(dur) : ''}${musicSize ? ' · ' + fmtBytes(musicSize) : ''}</span>
+            <button class="btn-link" id="music-remove">✕ Remover</button>
+          </div>
           ${musicNote ? `<div class="${musicNote.startsWith('⚠') ? 'sess-warn' : 'music-note'}">${musicNote}</div>` : ''}
           ${!musicNote && dur === 0 ? `<div class="sess-warn">⚠ Formato pode não ser suportado pelo navegador. Tente MP3, M4A, WAV ou OGG.</div>` : ''}
         ` : '<span class="music-none">Nenhuma música escolhida</span>'}
@@ -338,6 +357,9 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
     `;
 
     // Drop zone + clique abre seletor
+    const removeBtn = sec.querySelector<HTMLButtonElement>('#music-remove');
+    if (removeBtn) removeBtn.onclick = removeMusic;
+
     const drop = $('#drop');
     const fileInput = $<HTMLInputElement>('#music-file');
     drop.onclick = () => fileInput.click();
@@ -448,8 +470,8 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
     if (!id) return;
     let blob: Blob | undefined;
     try { blob = await mediaStore.get(id); } catch { /* ignore */ }
-    if (!blob) {
-      musicNote = '';
+    if (!blob || blob.size === 0) {
+      musicNote = '⚠ A música não está no armazenamento (a importação anterior não foi salva). Importe o arquivo novamente.';
       renderMusicSection();
       return;
     }
