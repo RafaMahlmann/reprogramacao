@@ -680,7 +680,40 @@ body {
   from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: translateY(0); }
 }
-#music-redetect { margin-top: 0.35rem; }
+#music-redetect { margin-top: 0.35rem; display: inline-block; }
+
+/* Interruptor "Afinar para 432 Hz" */
+.tune432 {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.6rem;
+  cursor: pointer;
+  user-select: none;
+}
+.tune432 input { display: none; }
+.tune432-track {
+  position: relative;
+  width: 44px;
+  height: 24px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid #2c313d;
+  transition: background 0.2s, border-color 0.2s;
+  flex: 0 0 auto;
+}
+.tune432-knob {
+  position: absolute;
+  top: 2px; left: 2px;
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: transform 0.2s, background 0.2s;
+}
+.tune432.is-on .tune432-track { background: rgba(79,208,122,0.25); border-color: var(--ok); }
+.tune432.is-on .tune432-knob { transform: translateX(20px); background: var(--ok); }
+.tune432-label { font-size: 0.85rem; font-weight: 600; color: var(--text); }
+.tune432.is-on .tune432-label { color: var(--ok); }
 
 .sess-controls {
   display: grid;

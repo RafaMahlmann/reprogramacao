@@ -12,7 +12,6 @@ import type { AudioClip, Project } from '../../core/types';
 import { clipStore, mediaStore } from '../../modules/storage/db';
 import { saveProject } from '../../modules/project/project-service';
 import { computeSchedule, SessionPlayer, type SessionSchedule } from '../../modules/audio/session-engine';
-import { BUILTIN_TRACKS, renderBuiltinTrack } from '../../modules/audio/builtin-tracks';
 import { getRecents, addRecent } from '../../modules/audio/music-recents';
 import { VOICE_PRESETS, VoiceEffectChain, DEFAULT_INTENSITY, type StackItem } from '../../modules/audio/voice-effects';
 import { bufferFromClip } from '../../modules/audio/playback';
@@ -117,9 +116,17 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
   const elCur = $('#cur');
   const elTot = $('#tot');
 
+  function currentTuningRate(): number {
+    if (project.music?.tuneTo432 && project.music.detectedTuningHz) {
+      return 432 / project.music.detectedTuningHz;
+    }
+    return 1;
+  }
+
   function makePlayer() {
     player = new SessionPlayer(schedule, clips, musicEl, s);
     player.setCallbacks((sec) => { if (!seeking) redraw(sec); }, () => { btnPlay.textContent = '▶'; });
+    player.setMusicRate(currentTuningRate());
   }
   makePlayer();
 
@@ -340,15 +347,6 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
         <button class="btn btn-project" id="url-go">Importar</button>
       </div>
 
-      <div class="music-lib">
-        <span class="music-lib-title">Trilhas internas (432 Hz)</span>
-        <div class="music-chips">
-          ${BUILTIN_TRACKS.map((t) =>
-            `<button class="music-chip ${project.music?.recordingId === t.id ? 'is-sel' : ''}" data-builtin="${t.id}">${t.name}</button>`,
-          ).join('')}
-        </div>
-      </div>
-
       ${getRecents().length ? `
       <div class="music-lib">
         <span class="music-lib-title">Recentes</span>
@@ -375,6 +373,11 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
                  </div>`
               : project.music?.detectedTuningHz
                 ? `<div class="music-tuning reveal">${tuningText(project.music.detectedTuningHz)}</div>
+                   <label class="tune432 ${project.music.tuneTo432 ? 'is-on' : ''}">
+                     <input type="checkbox" id="tune432" ${project.music.tuneTo432 ? 'checked' : ''}>
+                     <span class="tune432-track"><span class="tune432-knob"></span></span>
+                     <span class="tune432-label">${project.music.tuneTo432 ? '✓ Tocando em 432 Hz' : 'Afinar para 432 Hz'}</span>
+                   </label>
                    <button class="btn-link" id="music-redetect">↻ detectar de novo</button>`
                 : `<button class="btn btn-detect" id="music-detect">
                      <span class="btn-detect-pulse"></span>🔎 Detectar afinação <span class="btn-detect-432">432?</span>
@@ -413,6 +416,15 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
     const redetectBtn = sec.querySelector<HTMLButtonElement>('#music-redetect');
     if (redetectBtn) redetectBtn.onclick = runDetection;
 
+    const tune432 = sec.querySelector<HTMLInputElement>('#tune432');
+    if (tune432) tune432.onchange = () => {
+      if (!project.music) return;
+      project.music.tuneTo432 = tune432.checked;
+      player.setMusicRate(currentTuningRate());
+      void saveProject(project);
+      renderMusicSection();
+    };
+
     const drop = $('#drop');
     const fileInput = $<HTMLInputElement>('#music-file');
     drop.onclick = () => fileInput.click();
@@ -446,16 +458,6 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
         current.innerHTML = '<span class="sess-warn">⚠ Não foi possível baixar desse link (o site pode bloquear download por CORS). Tente baixar o arquivo e importar do dispositivo.</span>';
       }
     };
-
-    // Biblioteca interna
-    sec.querySelectorAll<HTMLButtonElement>('[data-builtin]').forEach((b) => {
-      b.onclick = async () => {
-        const id = b.dataset.builtin!;
-        b.textContent = 'Gerando…';
-        const blob = await renderBuiltinTrack(id);
-        await applyMusic(blob, BUILTIN_TRACKS.find((t) => t.id === id)!.name, id, true);
-      };
-    });
 
     // Recentes
     sec.querySelectorAll<HTMLButtonElement>('[data-recent]').forEach((b) => {

@@ -130,6 +130,19 @@ export class SessionPlayer {
 
   setMusicVolume(v: number) { if (this.musicGain) this.musicGain.gain.value = v; }
   setVoiceVolume(v: number) { if (this.voiceGain) this.voiceGain.gain.value = v; }
+
+  /**
+   * Ajuste de afinação da música (Opção A): muda a velocidade de reprodução,
+   * o que desloca o pitch de forma limpa (sem artefatos). preservesPitch=false
+   * garante que o pitch acompanhe a velocidade (resampling). rate=1 = sem ajuste.
+   */
+  setMusicRate(rate: number) {
+    if (!this.musicEl) return;
+    this.musicEl.preservesPitch = false;
+    // compatibilidade com navegadores mais antigos
+    (this.musicEl as unknown as { webkitPreservesPitch?: boolean }).webkitPreservesPitch = false;
+    this.musicEl.playbackRate = rate;
+  }
   setVoiceStack(stack: StackItem[]) { this.voiceFx?.setStack(stack); }
 
   private ensureGraph() {
