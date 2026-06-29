@@ -9,7 +9,8 @@
 import type { AudioClip, Project } from '../../core/types';
 import { VoiceRecorder } from '../../modules/recording/recorder';
 import { playClip } from '../../modules/audio/playback';
-import { runTeleprompter, type TeleprompterHandle } from '../../modules/teleprompter/teleprompter';
+// import { runTeleprompter, type TeleprompterHandle } from '../../modules/teleprompter/teleprompter';
+import type { TeleprompterHandle } from '../../modules/teleprompter/teleprompter';
 import { saveProject } from '../../modules/project/project-service';
 import { clipStore } from '../../modules/storage/db';
 import { uid } from '../../core/id';
@@ -214,7 +215,9 @@ export function renderRecordingScreen(root: HTMLElement, project: Project): void
 
     elStatus.textContent = '🔴 Gravando…';
     renderControls(false, true);
-    teleprompter = runTeleprompter(elPrompter, current().text, { wpm });
+    // Realce sincrônico desabilitado — manter para reativar futuramente
+    // teleprompter = runTeleprompter(elPrompter, current().text, { wpm });
+    elPrompter.textContent = current().text;
   }
 
   function stopRecording() {
