@@ -43,14 +43,11 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
   let musicEl: HTMLAudioElement | null = null;
   let musicName = project.music?.name ?? '';
   let musicSize = 0;
-  let musicNote = '';
+  let musicNote = project.music?.recordingId ? 'Carregando música…' : '';
   let schedule: SessionSchedule = computeSchedule(project, clips);
   let player: SessionPlayer;
 
-  if (project.music?.recordingId) {
-    const blob = await mediaStore.get(project.music.recordingId);
-    if (blob) { musicEl = makeAudio(blob); musicSize = blob.size; await waitDuration(musicEl); }
-  }
+  // A música é carregada em SEGUNDO PLANO (pode ser grande) — a tela aparece já.
 
   root.innerHTML = `
     <section class="rec">
@@ -442,6 +439,30 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
   renderFxSection();
   renderMusicSection();
   redraw(0);
+
+  // Carrega a música existente em segundo plano (não bloqueia a tela)
+  void loadMusicFromStorage();
+
+  async function loadMusicFromStorage() {
+    const id = project.music?.recordingId;
+    if (!id) return;
+    let blob: Blob | undefined;
+    try { blob = await mediaStore.get(id); } catch { /* ignore */ }
+    if (!blob) {
+      musicNote = '';
+      renderMusicSection();
+      return;
+    }
+    musicEl = makeAudio(blob);
+    musicName = project.music?.name ?? '';
+    musicSize = blob.size;
+    renderMusicSection();
+    await waitDuration(musicEl);
+    musicNote = '';
+    makePlayer();
+    renderMusicSection();
+    redraw(0);
+  }
 }
 
 function makeAudio(blob: Blob): HTMLAudioElement {
