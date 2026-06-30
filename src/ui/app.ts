@@ -1,6 +1,7 @@
-import { createProject, loadMostRecentProject } from '../modules/project/project-service';
+import { createProject, loadMostRecentProject, saveProject } from '../modules/project/project-service';
 import type { Project } from '../core/types';
-import { requestPersistentStorage } from '../modules/storage/db';
+import { requestPersistentStorage, clipStore } from '../modules/storage/db';
+import { importProjectFile } from '../modules/project/project-file';
 import { renderRecordingScreen } from './screens/recording-screen';
 import { renderSavedAudiosScreen } from './screens/saved-audios-screen';
 import { renderSessionScreen } from './screens/session-screen';
@@ -90,11 +91,38 @@ export function showNameCard(container: HTMLElement, onDone: () => void): void {
       <button class="btn btn-confirm name-card-btn" id="name-confirm" disabled>
         Continuar →
       </button>
+      <div class="name-card-divider"><span>ou continue de onde parou</span></div>
+      <label class="btn btn-project name-card-open" for="open-rpn-name">📂 Abrir projeto salvo (.rpn)</label>
+      <input type="file" accept=".rpn,application/octet-stream" hidden id="open-rpn-name" />
+      <p class="name-card-sub name-card-open-hint">Tem um arquivo <strong>.rpn</strong> que você salvou no computador? Abra aqui para recuperar seus áudios e textos exatamente como estavam.</p>
+      <p class="name-card-status rec-status"></p>
     </div>
   `;
 
   const input = container.querySelector<HTMLInputElement>('#name-input')!;
   const btnOk = container.querySelector<HTMLButtonElement>('#name-confirm')!;
+
+  const openInput = container.querySelector<HTMLInputElement>('#open-rpn-name');
+  if (openInput) {
+    openInput.onchange = async () => {
+      const file = openInput.files?.[0];
+      if (!file) return;
+      const status = container.querySelector<HTMLElement>('.name-card-status');
+      try {
+        if (status) status.textContent = 'Abrindo projeto…';
+        const imported = await importProjectFile(file);
+        for (const [id, clip] of imported.clips) await clipStore.save(id, clip);
+        if (imported.userName) setUserName(imported.userName);
+        await saveProject(imported.project);
+        renderRecordingScreen(container, imported.project);
+      } catch (err) {
+        if (status) status.textContent = '⚠ Não foi possível abrir este arquivo .rpn.';
+        console.error(err);
+      } finally {
+        openInput.value = '';
+      }
+    };
+  }
 
   input.addEventListener('input', () => {
     btnOk.disabled = input.value.trim().length === 0;
