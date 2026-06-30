@@ -99,7 +99,7 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
           </span>
         </label>
         <label>Duração alvo (min)
-          <input class="sess-num" type="number" id="target-min" min="1" max="120" step="0.1" value="${(s.targetDurationSec / 60).toFixed(1)}">
+          <input class="sess-num" type="number" id="target-min" min="1" max="720" step="0.1" value="${(s.targetDurationSec / 60).toFixed(1)}">
         </label>
       </div>
 
@@ -155,7 +155,7 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
   });
   const targetIn = $<HTMLInputElement>('#target-min');
   targetIn.onchange = () => {
-    const mins = Math.max(1, Math.min(120, Number(targetIn.value) || 1));
+    const mins = Math.max(1, Math.min(720, Number(targetIn.value) || 1));
     s.targetDurationSec = mins * 60;
     targetIn.value = mins.toFixed(1);
     rebuildSchedule();
@@ -449,9 +449,25 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
   }
 
   async function runExport(format: ExportFormat) {
-    if (format === 'wav' && schedule.totalSec > 1500) {
-      if (!confirm('WAV de sessão longa fica gigante (vários GB) e pode falhar. Recomendo o MP3. Continuar mesmo assim?')) return;
+    const safe = (getUserName() ? `Reprogramação - ${getUserName()}` : 'Reprogramação').replace(/[\\/:*?"<>|]/g, '');
+    const fileName = `${safe}.${format}`;
+
+    // Grava direto no disco quando o navegador suporta (memória baixa, qualquer tamanho)
+    let writable: { write: (b: BufferSource) => Promise<void>; close: () => Promise<void> } | null = null;
+    const picker = (window as unknown as { showSaveFilePicker?: (o: unknown) => Promise<{ createWritable: () => Promise<typeof writable> }> }).showSaveFilePicker;
+    if (picker) {
+      try {
+        const handle = await picker({
+          suggestedName: fileName,
+          types: [{ description: format.toUpperCase(), accept: { [format === 'mp3' ? 'audio/mpeg' : 'audio/wav']: ['.' + format] } }],
+        });
+        writable = await handle.createWritable();
+      } catch (e) {
+        if ((e as DOMException)?.name === 'AbortError') return; // usuário cancelou
+        writable = null; // sem permissão → cai para download
+      }
     }
+
     player.pause();
     const fill = $('#exp-fill');
     const status = $('#exp-status');
@@ -463,19 +479,19 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
     active.classList.add('exporting');
     const label = active.textContent;
     active.textContent = '⏳ Exportando…';
-    status.textContent = 'Renderizando…';
+    status.textContent = writable ? 'Gravando no disco…' : 'Renderizando…';
     try {
       const tracks = playlist.map((t) => ({ decode: () => decodeTrackCapped(t), durationSec: t.durationSec, rate: rateOf(t) }));
       const blob = await exportSession({
-        project, clips, tracks, format,
-        onProgress: (f) => { fill.style.width = `${Math.round(f * 100)}%`; status.textContent = `Renderizando… ${Math.round(f * 100)}%`; },
+        project, clips, tracks, format, writable,
+        onProgress: (f) => { fill.style.width = `${Math.round(f * 100)}%`; status.textContent = `${writable ? 'Gravando' : 'Renderizando'}… ${Math.round(f * 100)}%`; },
       });
-      status.textContent = '✓ Pronto! Baixando…';
-      const safe = (getUserName() ? `Reprogramação - ${getUserName()}` : 'Reprogramação').replace(/[\\/:*?"<>|]/g, '');
-      downloadBlob(blob, `${safe}.${format}`);
+      if (blob) { downloadBlob(blob, fileName); status.textContent = '✓ Pronto! Baixando…'; }
+      else { status.textContent = '✓ Salvo no disco!'; }
       setTimeout(() => { $('#exp-progress').style.display = 'none'; fill.style.width = '0%'; }, 2500);
     } catch (err) {
       console.error(err);
+      try { await writable?.close(); } catch { /* noop */ }
       status.textContent = '⚠ Falha na exportação. Tente uma duração menor ou faixas menores.';
     } finally {
       m3.disabled = false; wv.disabled = false;

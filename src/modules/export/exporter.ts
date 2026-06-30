@@ -1,15 +1,17 @@
 /**
  * Exportação da sessão para arquivo único (MP3 320k ou WAV 24-bit).
  *
- * Renderiza CICLO A CICLO via OfflineAudioContext (memória baixa) e encoda o
- * MP3 incrementalmente. A música é uma PLAYLIST tocada em sequência (sem loop
- * monótono): as faixas são decodificadas SOB DEMANDA, em ordem de tempo, e
- * liberadas quando não são mais necessárias — então a playlist pode ser longa
- * sem estourar a memória.
+ * - Renderiza CICLO A CICLO (OfflineAudioContext) → memória baixa.
+ * - MP3 é encodado em POOL DE WEB WORKERS (vários núcleos, em paralelo, fora da
+ *   thread da tela). Cada ciclo vira um MP3 independente; as junções caem no
+ *   silêncio do intervalo final, então não há estalos.
+ * - A saída pode ir DIRETO PRO DISCO (File System Access API) — assim dá para
+ *   exportar horas de áudio sem acumular tudo na memória. Sem isso, cai para um
+ *   Blob em memória (fallback).
+ * - A música é uma PLAYLIST decodificada sob demanda (faixas longas com cap).
  *
- * Aplica voz + efeitos + volumes + música em sequência + ajuste 432 (rate).
+ * Tudo roda no aparelho do usuário — sem servidor, sem custo.
  */
-import * as lamejs from '@breezystack/lamejs';
 import type { AudioClip, Project } from '../../core/types';
 import { computeSchedule } from '../audio/session-engine';
 import { buildStack } from '../audio/voice-effects';
@@ -25,17 +27,30 @@ export interface ExportTrack {
 
 interface Seg { trackIndex: number; startSession: number; endSession: number; rate: number; }
 
+interface Sink {
+  write: (b: Uint8Array) => Promise<void> | void;
+  close: () => Promise<Blob | null>;
+}
+
 export interface ExportParams {
   project: Project;
   clips: Map<string, AudioClip>;
   tracks: ExportTrack[];
   format: ExportFormat;
+  /** FileSystemWritableFileStream para gravar no disco; ausente = Blob em memória. */
+  writable?: { write: (b: BufferSource) => Promise<void>; close: () => Promise<void> } | null;
   onProgress?: (frac: number) => void;
 }
 
-function floatTo16(x: number): number {
-  const v = Math.max(-1, Math.min(1, x));
-  return v < 0 ? v * 0x8000 : v * 0x7fff;
+function makeSink(writable: ExportParams['writable'], mime: string): Sink {
+  if (writable) {
+    return { write: (b) => writable.write(b as unknown as BufferSource), close: async () => { await writable.close(); return null; } };
+  }
+  const parts: BlobPart[] = [];
+  return {
+    write: (b) => { parts.push(b as unknown as BlobPart); },
+    close: async () => new Blob(parts, { type: mime }),
+  };
 }
 
 function buildSegments(tracks: ExportTrack[], totalSec: number): Seg[] {
@@ -53,8 +68,45 @@ function buildSegments(tracks: ExportTrack[], totalSec: number): Seg[] {
   return segs;
 }
 
-export async function exportSession(p: ExportParams): Promise<Blob> {
-  const { project, clips, tracks, format, onProgress } = p;
+function makeMp3Pool(n: number) {
+  const workers = Array.from({ length: n }, () =>
+    new Worker(new URL('./mp3-worker.ts', import.meta.url), { type: 'module' }),
+  );
+  const idle = [...workers];
+  const waiters: (() => void)[] = [];
+  const cbs = new Map<Worker, (ci: number, b: Uint8Array) => void>();
+  let active = 0;
+  let drainResolve: (() => void) | null = null;
+
+  for (const w of workers) {
+    w.onmessage = (e: MessageEvent) => {
+      const { cycleIndex, mp3 } = e.data as { cycleIndex: number; mp3: ArrayBuffer };
+      const cb = cbs.get(w); cbs.delete(w);
+      idle.push(w); active--;
+      waiters.shift()?.();
+      cb?.(cycleIndex, new Uint8Array(mp3));
+      if (active === 0 && drainResolve) { drainResolve(); drainResolve = null; }
+    };
+  }
+  async function acquire(): Promise<Worker> {
+    if (idle.length) return idle.pop()!;
+    await new Promise<void>((r) => waiters.push(r));
+    return idle.pop()!;
+  }
+  return {
+    async dispatch(ci: number, L: Float32Array, R: Float32Array, sr: number, onResult: (ci: number, b: Uint8Array) => void) {
+      const w = await acquire();
+      active++;
+      cbs.set(w, onResult);
+      w.postMessage({ cycleIndex: ci, L, R, sampleRate: sr }, [L.buffer as ArrayBuffer, R.buffer as ArrayBuffer]);
+    },
+    drain(): Promise<void> { return active === 0 ? Promise.resolve() : new Promise<void>((r) => { drainResolve = r; }); },
+    destroy() { for (const w of workers) w.terminate(); },
+  };
+}
+
+export async function exportSession(p: ExportParams): Promise<Blob | null> {
+  const { project, clips, tracks, format, writable, onProgress } = p;
   const s = project.settings;
   const sr = s.sampleRate;
   const channels = 2;
@@ -66,7 +118,6 @@ export async function exportSession(p: ExportParams): Promise<Blob> {
   const stack = s.voiceStack.map((id) => ({ id, intensity: s.voiceIntensities[id] ?? 0.5 }));
   const segments = buildSegments(tracks, schedule.totalSec);
 
-  // cache de buffers decodificados (um por faixa); liberado quando não usado mais
   const bufCache = new Map<number, AudioBuffer>();
   async function getTrackBuffer(idx: number): Promise<AudioBuffer> {
     let b = bufCache.get(idx);
@@ -74,50 +125,59 @@ export async function exportSession(p: ExportParams): Promise<Blob> {
     return b;
   }
 
-  const mp3enc = format === 'mp3' ? new lamejs.Mp3Encoder(channels, sr, 320) : null;
-  const parts: BlobPart[] = [];
+  const sink = makeSink(writable, format === 'mp3' ? 'audio/mpeg' : 'audio/wav');
+
+  if (format === 'wav') {
+    await sink.write(wavHeader(sr, channels, cycles * cycleSamples));
+  }
+
+  // Pool de workers (MP3). Usa vários núcleos, sem exagerar.
+  const N = Math.max(1, Math.min(navigator.hardwareConcurrency || 2, 4));
+  const pool = format === 'mp3' ? makeMp3Pool(N) : null;
+
+  // Escrita em ordem (os ciclos podem voltar dos workers fora de ordem)
+  let nextWrite = 0;
+  const buffered = new Map<number, Uint8Array>();
+  let writeChain: Promise<void> = Promise.resolve();
+  function writeInOrder(ci: number, bytes: Uint8Array) {
+    buffered.set(ci, bytes);
+    writeChain = writeChain.then(async () => {
+      while (buffered.has(nextWrite)) {
+        const b = buffered.get(nextWrite)!;
+        buffered.delete(nextWrite);
+        await sink.write(b);
+        nextWrite++;
+      }
+    });
+  }
 
   for (let c = 0; c < cycles; c++) {
     const A = c * schedule.cycleSec;
     const B = A + schedule.cycleSec;
-    const buf = await renderCycle(c, A, B);
-    const L = buf.getChannelData(0);
-    const R = buf.numberOfChannels > 1 ? buf.getChannelData(1) : L;
+    const buf = await renderCycle(A, B);
+    const L = buf.getChannelData(0).slice();
+    const R = (buf.numberOfChannels > 1 ? buf.getChannelData(1) : buf.getChannelData(0)).slice();
 
-    if (mp3enc) {
-      const l16 = new Int16Array(L.length);
-      const r16 = new Int16Array(R.length);
-      for (let i = 0; i < L.length; i++) { l16[i] = floatTo16(L[i]); r16[i] = floatTo16(R[i]); }
-      const BLOCK = 1152;
-      for (let i = 0; i < l16.length; i += BLOCK) {
-        const data = mp3enc.encodeBuffer(l16.subarray(i, i + BLOCK), r16.subarray(i, i + BLOCK));
-        if (data.length > 0) parts.push(new Uint8Array(data) as unknown as BlobPart);
-      }
+    if (pool) {
+      await pool.dispatch(c, L, R, sr, writeInOrder);
     } else {
-      parts.push(pcm24Interleaved(L, R) as unknown as BlobPart);
+      await sink.write(pcm24Interleaved(L, R));
     }
 
-    // libera buffers de faixas que já passaram
+    // libera buffers de faixas já tocadas
     for (const [idx] of bufCache) {
       const lastEnd = Math.max(0, ...segments.filter((sg) => sg.trackIndex === idx).map((sg) => sg.endSession));
       if (lastEnd < A) bufCache.delete(idx);
     }
-
     onProgress?.((c + 1) / cycles);
-    await new Promise((r) => setTimeout(r, 0));
   }
 
-  if (mp3enc) {
-    const end = mp3enc.flush();
-    if (end.length > 0) parts.push(new Uint8Array(end) as unknown as BlobPart);
-    return new Blob(parts, { type: 'audio/mpeg' });
-  }
-  return buildWav24(parts, sr, channels, cycles * cycleSamples);
+  if (pool) { await pool.drain(); await writeChain; pool.destroy(); }
+  return sink.close();
 
-  async function renderCycle(_c: number, A: number, B: number): Promise<AudioBuffer> {
+  async function renderCycle(A: number, B: number): Promise<AudioBuffer> {
     const ctx = new OfflineAudioContext(channels, cycleSamples, sr);
 
-    // voz
     const voiceGain = ctx.createGain();
     voiceGain.gain.value = s.voiceVolume;
     const chain = buildStack(ctx, stack);
@@ -136,7 +196,6 @@ export async function exportSession(p: ExportParams): Promise<Blob> {
       offset += r.durationSec + (i < schedule.recorded.length - 1 ? s.gapBetweenCommandsSec : 0);
     });
 
-    // música: segmentos que cruzam [A, B)
     const overlapping = segments.filter((sg) => sg.endSession > A && sg.startSession < B);
     if (overlapping.length > 0) {
       const mg = ctx.createGain();
@@ -153,7 +212,6 @@ export async function exportSession(p: ExportParams): Promise<Blob> {
         if (bufOffset < buffer.duration) m.start(whenInCycle, bufOffset);
       }
     }
-
     return ctx.startRendering();
   }
 }
@@ -171,11 +229,11 @@ function pcm24Interleaved(L: Float32Array, R: Float32Array): Uint8Array {
   return out;
 }
 
-function buildWav24(parts: BlobPart[], sampleRate: number, channels: number, totalFrames: number): Blob {
+function wavHeader(sampleRate: number, channels: number, totalFrames: number): Uint8Array {
   const bytesPerSample = 3;
   const dataSize = totalFrames * channels * bytesPerSample;
-  const header = new ArrayBuffer(44);
-  const view = new DataView(header);
+  const buf = new ArrayBuffer(44);
+  const view = new DataView(buf);
   const wstr = (off: number, str: string) => { for (let i = 0; i < str.length; i++) view.setUint8(off + i, str.charCodeAt(i)); };
   const blockAlign = channels * bytesPerSample;
   wstr(0, 'RIFF'); view.setUint32(4, 36 + dataSize, true); wstr(8, 'WAVE');
@@ -183,5 +241,5 @@ function buildWav24(parts: BlobPart[], sampleRate: number, channels: number, tot
   view.setUint16(22, channels, true); view.setUint32(24, sampleRate, true);
   view.setUint32(28, sampleRate * blockAlign, true); view.setUint16(32, blockAlign, true);
   view.setUint16(34, 24, true); wstr(36, 'data'); view.setUint32(40, dataSize, true);
-  return new Blob([header, ...parts], { type: 'audio/wav' });
+  return new Uint8Array(buf);
 }
