@@ -1,10 +1,10 @@
 import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
-// Base relativa para funcionar tanto em domínio próprio quanto em subpasta
-// (ex.: GitHub Pages). Paths absolutos quebram em subpasta.
-export default defineConfig({
-  base: './',
+// No build (GitHub Pages) o app fica em /reprogramacao/. No dev (`npm run dev`)
+// fica na raiz, para não mudar o http://localhost:5173 do dia a dia.
+export default defineConfig(({ command }) => ({
+  base: command === 'build' ? '/reprogramacao/' : '/',
   plugins: [
     VitePWA({
       registerType: 'autoUpdate',
@@ -31,4 +31,4 @@ export default defineConfig({
       },
     }),
   ],
-});
+}));
