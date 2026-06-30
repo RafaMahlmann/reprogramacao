@@ -341,8 +341,9 @@ export function renderRecordingScreen(root: HTMLElement, project: Project): void
     // Realce sincrônico desabilitado — reativar junto com o painel de velocidade
     // teleprompter = runTeleprompter(el('.rec-prompter'), applyName(current().text), { wpm });
     el('.rec-prompter').textContent = applyName(current().text);
-    // Leva o texto a ser lido para o topo, para a pessoa ler com calma e rolar com o dedo
-    requestAnimationFrame(() => el('.rec-text').scrollIntoView({ behavior: 'smooth', block: 'start' }));
+    // Abre como "nova aba": waveform no topo e o texto a ser lido logo abaixo,
+    // independente de onde estava o botão antes de gravar.
+    setTimeout(() => el('.rec-viz').scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
   }
 
   function stopRecording() {
