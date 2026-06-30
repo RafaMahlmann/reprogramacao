@@ -434,21 +434,42 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
       ${ready ? `
         <p class="export-sub">Arquivo único: voz + efeitos + playlist + 432 + intervalos. Duração: <strong>${fmt(schedule.totalSec)}</strong>.</p>
         <div class="export-buttons">
-          <button class="btn btn-export" id="exp-mp3">⬇ MP3 320k</button>
+          <button class="btn btn-export" id="exp-mp3-256">⬇ MP3 256k <span class="export-badge">recomendado</span></button>
+          <button class="btn btn-export-2" id="exp-mp3-320">⬇ MP3 320k</button>
           <button class="btn btn-export-2" id="exp-wav">⬇ WAV 24-bit</button>
         </div>
+        <p class="export-tip">💡 O <strong>256k</strong> entrega qualidade praticamente idêntica para voz + música e codifica bem mais rápido. A exportação em MP3 pode levar <strong>alguns minutos no celular</strong> — mantenha a tela ligada. Para a melhor experiência de download e processamento, exporte no <strong>computador (Windows)</strong>, onde roda de forma mais rápida e nativa.</p>
         <div class="export-progress" id="exp-progress" style="display:none">
           <div class="export-bar"><div class="export-bar-fill" id="exp-fill"></div></div>
-          <span id="exp-status"></span>
+          <div class="export-progress-row"><span id="exp-status"></span><span id="exp-elapsed" class="export-elapsed"></span></div>
+          <div id="exp-save" class="export-save" style="display:none"></div>
         </div>
       ` : `<p class="fx-none">Grave os comandos antes de exportar.</p>`}
     `;
     if (!ready) return;
-    ex.querySelector<HTMLButtonElement>('#exp-mp3')!.onclick = () => runExport('mp3');
+    ex.querySelector<HTMLButtonElement>('#exp-mp3-256')!.onclick = () => runExport('mp3', 256);
+    ex.querySelector<HTMLButtonElement>('#exp-mp3-320')!.onclick = () => runExport('mp3', 320);
     ex.querySelector<HTMLButtonElement>('#exp-wav')!.onclick = () => runExport('wav');
   }
 
-  async function runExport(format: ExportFormat) {
+  function showSaveButton(blob: Blob, fileName: string) {
+    const saveDiv = $('#exp-save');
+    saveDiv.style.display = 'block';
+    saveDiv.innerHTML = `<button class="btn btn-export" id="exp-save-btn">⬇ Salvar / compartilhar arquivo</button>`;
+    $<HTMLButtonElement>('#exp-save-btn').onclick = async () => {
+      const type = fileName.endsWith('.wav') ? 'audio/wav' : 'audio/mpeg';
+      const file = new File([blob], fileName, { type });
+      const nav = navigator as unknown as { canShare?: (d: unknown) => boolean; share?: (d: unknown) => Promise<void> };
+      // No celular: abre a folha de compartilhar (salvar em Arquivos, enviar, etc.) — lida bem com arquivos grandes
+      if (nav.canShare && nav.share && nav.canShare({ files: [file] })) {
+        try { await nav.share({ files: [file], title: fileName }); return; }
+        catch (e) { if ((e as DOMException)?.name === 'AbortError') return; }
+      }
+      downloadBlob(blob, fileName); // computador / fallback
+    };
+  }
+
+  async function runExport(format: ExportFormat, bitrate?: number) {
     const safe = (getUserName() ? `Reprogramação - ${getUserName()}` : 'Reprogramação').replace(/[\\/:*?"<>|]/g, '');
     const fileName = `${safe}.${format}`;
 
@@ -471,32 +492,57 @@ export async function renderSessionScreen(root: HTMLElement, project: Project): 
     player.pause();
     const fill = $('#exp-fill');
     const status = $('#exp-status');
+    const elapsedEl = $('#exp-elapsed');
+    const saveDiv = $('#exp-save');
+    saveDiv.style.display = 'none'; saveDiv.innerHTML = '';
     $('#exp-progress').style.display = 'flex';
-    const m3 = $<HTMLButtonElement>('#exp-mp3');
-    const wv = $<HTMLButtonElement>('#exp-wav');
-    const active = format === 'mp3' ? m3 : wv;
-    m3.disabled = true; wv.disabled = true;
-    active.classList.add('exporting');
-    const label = active.textContent;
-    active.textContent = '⏳ Exportando…';
-    status.textContent = writable ? 'Gravando no disco…' : 'Renderizando…';
+    fill.style.width = '0%';
+    const buttons = Array.from(root.querySelectorAll<HTMLButtonElement>('.export-buttons .btn'));
+    buttons.forEach((b) => (b.disabled = true));
+
+    // Visualização "viva": cronômetro + mensagens que mudam, para nunca parecer travado
+    const t0 = Date.now();
+    let finalizing = false;
+    const msgs = [
+      'Codificando o áudio…',
+      'Isso pode levar alguns minutos no celular…',
+      'Ainda trabalhando — pode deixar aberto…',
+      'Mantenha a tela ligada…',
+      'Quase lá…',
+    ];
+    let mi = 0;
+    status.textContent = writable ? 'Gravando no disco…' : (format === 'mp3' ? 'Preparando o MP3…' : 'Renderizando…');
+    const timer = window.setInterval(() => {
+      const sec = Math.floor((Date.now() - t0) / 1000);
+      elapsedEl.textContent = `⏱ ${fmt(sec)}`;
+      if (finalizing) { status.textContent = 'Finalizando o arquivo…'; return; }
+      if (format === 'mp3' && sec > 3 && sec % 5 === 0) { mi = (mi + 1) % msgs.length; status.textContent = msgs[mi]; }
+    }, 1000);
+
     try {
       const tracks = playlist.map((t) => ({ decode: () => decodeTrackCapped(t), durationSec: t.durationSec, rate: rateOf(t) }));
       const blob = await exportSession({
-        project, clips, tracks, format, writable,
-        onProgress: (f) => { fill.style.width = `${Math.round(f * 100)}%`; status.textContent = `${writable ? 'Gravando' : 'Renderizando'}… ${Math.round(f * 100)}%`; },
+        project, clips, tracks, format, bitrate, writable,
+        onProgress: (f) => { fill.style.width = `${Math.round(f * 100)}%`; if (f >= 0.999) finalizing = true; },
       });
-      if (blob) { downloadBlob(blob, fileName); status.textContent = '✓ Pronto! Baixando…'; }
-      else { status.textContent = '✓ Salvo no disco!'; }
-      setTimeout(() => { $('#exp-progress').style.display = 'none'; fill.style.width = '0%'; }, 2500);
+      clearInterval(timer);
+      fill.style.width = '100%';
+      elapsedEl.textContent = `⏱ ${fmt(Math.floor((Date.now() - t0) / 1000))}`;
+      if (blob) {
+        status.textContent = '✓ Pronto! Toque para salvar:';
+        showSaveButton(blob, fileName);
+      } else {
+        status.textContent = '✓ Salvo no disco!';
+        setTimeout(() => { $('#exp-progress').style.display = 'none'; fill.style.width = '0%'; }, 3000);
+      }
     } catch (err) {
+      clearInterval(timer);
       console.error(err);
       try { await writable?.close(); } catch { /* noop */ }
-      status.textContent = '⚠ Falha na exportação. Tente uma duração menor ou faixas menores.';
+      status.textContent = '⚠ Falha na exportação. Tente o 256k, uma duração menor, ou exporte no computador.';
     } finally {
-      m3.disabled = false; wv.disabled = false;
-      active.classList.remove('exporting');
-      if (label) active.textContent = label;
+      clearInterval(timer);
+      buttons.forEach((b) => (b.disabled = false));
     }
   }
 

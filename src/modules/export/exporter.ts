@@ -37,6 +37,8 @@ export interface ExportParams {
   clips: Map<string, AudioClip>;
   tracks: ExportTrack[];
   format: ExportFormat;
+  /** Bitrate do MP3 em kbps (256 padrão recomendado, 320 máximo). */
+  bitrate?: number;
   /** FileSystemWritableFileStream para gravar no disco; ausente = Blob em memória. */
   writable?: { write: (b: BufferSource) => Promise<void>; close: () => Promise<void> } | null;
   onProgress?: (frac: number) => void;
@@ -68,7 +70,7 @@ function buildSegments(tracks: ExportTrack[], totalSec: number): Seg[] {
   return segs;
 }
 
-function makeMp3Pool(n: number) {
+function makeMp3Pool(n: number, kbps: number) {
   const workers = Array.from({ length: n }, () =>
     new Worker(new URL('./mp3-worker.ts', import.meta.url), { type: 'module' }),
   );
@@ -98,7 +100,7 @@ function makeMp3Pool(n: number) {
       const w = await acquire();
       active++;
       cbs.set(w, onResult);
-      w.postMessage({ cycleIndex: ci, L, R, sampleRate: sr }, [L.buffer as ArrayBuffer, R.buffer as ArrayBuffer]);
+      w.postMessage({ cycleIndex: ci, L, R, sampleRate: sr, kbps }, [L.buffer as ArrayBuffer, R.buffer as ArrayBuffer]);
     },
     drain(): Promise<void> { return active === 0 ? Promise.resolve() : new Promise<void>((r) => { drainResolve = r; }); },
     destroy() { for (const w of workers) w.terminate(); },
@@ -107,6 +109,7 @@ function makeMp3Pool(n: number) {
 
 export async function exportSession(p: ExportParams): Promise<Blob | null> {
   const { project, clips, tracks, format, writable, onProgress } = p;
+  const kbps = p.bitrate || 320;
   const s = project.settings;
   const sr = s.sampleRate;
   const channels = 2;
@@ -133,7 +136,7 @@ export async function exportSession(p: ExportParams): Promise<Blob | null> {
 
   // Pool de workers (MP3). Usa vários núcleos, sem exagerar.
   const N = Math.max(1, Math.min(navigator.hardwareConcurrency || 2, 4));
-  const pool = format === 'mp3' ? makeMp3Pool(N) : null;
+  const pool = format === 'mp3' ? makeMp3Pool(N, kbps) : null;
 
   // Escrita em ordem (os ciclos podem voltar dos workers fora de ordem)
   let nextWrite = 0;

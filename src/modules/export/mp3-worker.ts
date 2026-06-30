@@ -22,10 +22,10 @@ function to16(x: number): number {
 }
 
 ctx.onmessage = (e: MessageEvent) => {
-  const { cycleIndex, L, R, sampleRate } = e.data as {
-    cycleIndex: number; L: Float32Array; R: Float32Array; sampleRate: number;
+  const { cycleIndex, L, R, sampleRate, kbps } = e.data as {
+    cycleIndex: number; L: Float32Array; R: Float32Array; sampleRate: number; kbps?: number;
   };
-  const enc = new lamejs.Mp3Encoder(2, sampleRate, 320);
+  const enc = new lamejs.Mp3Encoder(2, sampleRate, kbps || 320);
   const n = L.length;
   const l16 = new Int16Array(n);
   const r16 = new Int16Array(n);
