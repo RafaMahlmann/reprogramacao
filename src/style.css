@@ -203,10 +203,19 @@ body {
 
 /* ---------- Dots de navegação ---------- */
 .rec-dots {
+  position: sticky;
+  top: 0;
+  z-index: 20;
   display: flex;
   gap: 8px;
-  margin-bottom: 0.9rem;
+  margin: 0 -1.25rem 0.9rem;
+  padding: 0.7rem 1.25rem;
+  background: var(--bg);
+  border-bottom: 1px solid #1f232c;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
+.rec-dots::-webkit-scrollbar { display: none; }
 
 .rec-dot {
   width: 28px;
